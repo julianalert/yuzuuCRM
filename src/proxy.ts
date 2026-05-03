@@ -3,11 +3,19 @@ import { NextResponse, type NextRequest } from 'next/server'
 import type { Database } from '@/lib/types/database'
 
 export async function proxy(request: NextRequest) {
+  // If Supabase env vars are missing, let all requests through rather than crashing
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('[proxy] Missing Supabase env vars — skipping auth check')
+    return NextResponse.next({ request })
+  }
+
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {
@@ -27,9 +35,14 @@ export async function proxy(request: NextRequest) {
   )
 
   // Refresh the session — must call getUser() to keep session alive
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  let user = null
+  try {
+    const { data } = await supabase.auth.getUser()
+    user = data.user
+  } catch (err) {
+    // If Supabase is unreachable, treat as unauthenticated rather than crashing
+    console.error('[proxy] getUser failed:', err)
+  }
 
   const publicPaths = ['/login', '/signup', '/invite', '/auth']
   const { pathname } = request.nextUrl
