@@ -1,0 +1,20 @@
+import type { Database } from './database'
+
+export type Workspace = Database['public']['Tables']['workspaces']['Row']
+export type User = Database['public']['Tables']['users']['Row']
+export type Account = Database['public']['Tables']['accounts']['Row']
+export type Contact = Database['public']['Tables']['contacts']['Row']
+export type Deal = Database['public']['Tables']['deals']['Row']
+export type Activity = Database['public']['Tables']['activities']['Row']
+export type Signal = Database['public']['Tables']['signals']['Row']
+export type Sequence = Database['public']['Tables']['sequences']['Row']
+export type ICP = Database['public']['Tables']['icps']['Row']
+export type Invitation = Database['public']['Tables']['invitations']['Row']
+export type SequenceEnrollment = Database['public']['Tables']['sequence_enrollments']['Row']
+export type SequenceStepLog = Database['public']['Tables']['sequence_step_logs']['Row']
+
+export type TamBuildJob = Database['public']['Tables']['tam_build_jobs']['Row']
+export type AccountStatus = Account['status']
+export type DealStage = Deal['stage']
+export type UserRole = User['role']
+export type PlanType = Workspace['plan']
