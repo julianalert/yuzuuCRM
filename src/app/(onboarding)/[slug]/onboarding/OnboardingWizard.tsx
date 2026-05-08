@@ -1,46 +1,193 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { toast } from 'sonner'
 import { useOnboardingStore } from '@/stores/onboarding-store'
-import { useTamBuildStore } from '@/stores/tam-build-store'
 import { Icon, Icons } from '@/components/shared/Icon'
-import type { ICPParams } from '@/lib/ai/icp-extractor'
 
 interface Props {
   slug: string
 }
 
-// ── Step 1: Describe ICP ──────────────────────────────────────────────────────
-function StepDescribe({ slug, onNext }: { slug: string; onNext: (params: ICPParams) => void }) {
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+const SERVICES = [
+  { id: 'seo',              label: 'Local SEO',          signal: 'missing GMB optimisation, low review velocity, low quality on-page SEO' },
+  { id: 'web',              label: 'Web Design',          signal: 'no website or outdated site' },
+  { id: 'ads',              label: 'Paid Ads',            signal: 'no Google/Meta ad presence' },
+  { id: 'social',           label: 'Social Media',        signal: 'inactive or absent social profiles' },
+  { id: 'rep',              label: 'Reputation Mgmt',     signal: 'low review count or unresponsive reviews' },
+  { id: 'email',            label: 'Email Marketing',     signal: 'no visible email or newsletter presence' },
+  { id: 'booking',          label: 'Online Booking',      signal: 'no booking system detected · phone-only contact · "By appointment" with no booking link' },
+  { id: 'ai-receptionist',  label: 'AI Receptionist',     signal: 'no chat widget on site · limited hours (closed evenings/weekends) · missed call risk' },
+]
+
+const NICHES = [
+  'Restaurants & Cafés',
+  'Dental & Medical',
+  'Automotive',
+  'Real Estate',
+  'Fitness & Wellness',
+  'Legal Services',
+  'Home Services',
+  'Retail & E-commerce',
+  'Beauty & Salons',
+  'Education & Tutoring',
+]
+
+// ── Sub-components ─────────────────────────────────────────────────────────────
+
+function AddCustomNiche({ onAdd }: { onAdd: (value: string) => void }) {
+  const [adding, setAdding] = useState(false)
+  const [value, setValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  function open() {
+    setAdding(true)
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
+  function commit() {
+    const v = value.trim()
+    if (v) onAdd(v)
+    setValue('')
+    setAdding(false)
+  }
+
+  function handleKey(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') { e.preventDefault(); commit() }
+    if (e.key === 'Escape') { setValue(''); setAdding(false) }
+  }
+
+  const pillBase: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '8px 14px',
+    borderRadius: 'var(--radius)',
+    fontSize: 13.5,
+    fontFamily: 'DM Sans, sans-serif',
+    lineHeight: 1.3,
+    transition: 'all 0.12s ease',
+  }
+
+  if (adding) {
+    return (
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKey}
+        onBlur={commit}
+        placeholder="Type and press Enter"
+        style={{
+          ...pillBase,
+          border: '1.5px solid var(--accent)',
+          background: 'var(--surface)',
+          color: 'var(--text-1)',
+          outline: 'none',
+          width: 200,
+        }}
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={open}
+      style={{
+        ...pillBase,
+        border: '1px dashed var(--border-2)',
+        background: 'transparent',
+        color: 'var(--text-3)',
+        cursor: 'pointer',
+        gap: 6,
+      }}
+    >
+      <span style={{ fontSize: 16, lineHeight: 1 }}>+</span>
+      Add type
+    </button>
+  )
+}
+
+function SelectionPill({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string
+  selected: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '8px 14px',
+        borderRadius: 'var(--radius)',
+        border: selected ? '1.5px solid var(--accent)' : '1px solid var(--border)',
+        background: selected ? 'var(--accent)' : 'var(--surface)',
+        color: selected ? 'var(--accent-fg)' : 'var(--text-2)',
+        fontSize: 13.5,
+        fontWeight: selected ? 500 : 400,
+        cursor: 'pointer',
+        transition: 'all 0.12s ease',
+        fontFamily: 'DM Sans, sans-serif',
+        lineHeight: 1.3,
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+// ── Step 1: Brand Profile (unchanged) ──────────────────────────────────────────
+
+function StepBrand({ slug, onNext }: { slug: string; onNext: () => void }) {
   const [companyName, setCompanyName] = useState('')
-  const [description, setDescription] = useState('')
+  const [websiteUrl, setWebsiteUrl] = useState('')
   const [loading, setLoading] = useState(false)
-  const { setDescription: saveDescription, setParams, setStep } = useOnboardingStore()
+  const store = useOnboardingStore()
   const router = useRouter()
 
-  // Load persisted description after mount (avoids SSR hydration mismatch)
   useEffect(() => {
-    const stored = useOnboardingStore.getState().description
-    if (stored) setDescription(stored)
+    const s = useOnboardingStore.getState()
+    if (s.companyName) setCompanyName(s.companyName)
+    if (s.websiteUrl) setWebsiteUrl(s.websiteUrl)
   }, [])
 
-  async function handleAnalyze() {
+  function isValidUrl(value: string): boolean {
+    try {
+      const url = new URL(value.trim())
+      return url.protocol === 'http:' || url.protocol === 'https:'
+    } catch {
+      return false
+    }
+  }
+
+  async function handleNext() {
     if (!companyName.trim()) {
       toast.error('Please enter your company name.')
       return
     }
-    if (description.trim().length < 20) {
-      toast.error('Please write at least 20 characters describing your ICP.')
+    if (!websiteUrl.trim()) {
+      toast.error('Please enter your website URL.')
       return
     }
+    if (!isValidUrl(websiteUrl)) {
+      toast.error('Please enter a valid URL starting with https:// or http://')
+      return
+    }
+
     setLoading(true)
-    saveDescription(description)
+    store.setCompanyName(companyName.trim())
+    store.setWebsiteUrl(websiteUrl.trim())
 
     try {
-      // Rename workspace first
       const renameRes = await fetch('/api/workspace/rename', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -51,42 +198,40 @@ function StepDescribe({ slug, onNext }: { slug: string; onNext: (params: ICPPara
 
       const newSlug: string = renameData.slug
 
-      // Extract ICP params (does NOT save to DB — that happens when build starts)
-      const res = await fetch('/api/icp/extract', {
+      const extractRes = await fetch('/api/brand/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description }),
+        body: JSON.stringify({ websiteUrl: websiteUrl.trim() }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Failed to extract ICP')
+      const extractData = await extractRes.json()
+      if (!extractRes.ok) throw new Error(extractData.error ?? 'Failed to extract brand profile')
 
-      // Persist step + params BEFORE any navigation so they survive the slug change
-      setParams(data.params)
-      setStep(2)
+      store.setOfferDescription(extractData.offerDescription ?? '')
+      store.setBrandSummary(extractData.brandSummary ?? '')
+      store.setStep(2)
 
       if (newSlug !== slug) {
-        // Navigate to new slug — persisted state will restore step 2
         router.replace(`/${newSlug}/onboarding`)
         return
       }
 
-      onNext(data.params)
+      onNext()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to analyze ICP')
+      toast.error(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="page-enter" style={{ maxWidth: 680, margin: '0 auto', padding: '40px 0' }}>
+    <div className="page-enter" style={{ maxWidth: 640, margin: '0 auto', padding: '40px 0' }}>
       <div style={{ textAlign: 'center', marginBottom: 40 }}>
-        <div style={{ fontSize: 36, marginBottom: 12 }}>🎯</div>
+        <div style={{ fontSize: 36, marginBottom: 12 }}>📍</div>
         <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.5px', marginBottom: 8 }}>
           Set up your workspace
         </h1>
         <p style={{ fontSize: 15, color: 'var(--text-3)', lineHeight: 1.5 }}>
-          Tell us about your company, then describe who you sell to.
+          Enter your website and we&rsquo;ll build your brand profile automatically.
         </p>
       </div>
 
@@ -97,37 +242,37 @@ function StepDescribe({ slug, onNext }: { slug: string; onNext: (params: ICPPara
             className="form-input"
             value={companyName}
             onChange={(e) => setCompanyName(e.target.value)}
-            placeholder="e.g. Acme Corp"
+            onKeyDown={(e) => e.key === 'Enter' && !loading && handleNext()}
+            placeholder="e.g. Acme Agency"
             autoFocus
           />
         </div>
 
-        <div className="form-group" style={{ marginBottom: 8 }}>
-          <label className="form-label">Describe your ideal customer</label>
-          <textarea
+        <div className="form-group" style={{ marginBottom: 24 }}>
+          <label className="form-label">Your website URL</label>
+          <input
             className="form-input"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="e.g. B2B SaaS companies, 50–500 employees, Series A or B, based in France or UK, using Salesforce or HubSpot, hiring sales reps right now"
-            style={{ height: 140, resize: 'vertical', padding: '12px', lineHeight: 1.6 }}
+            value={websiteUrl}
+            onChange={(e) => setWebsiteUrl(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !loading && handleNext()}
+            placeholder="https://your-agency.com"
+            type="url"
           />
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 20 }}>
-          {description.length} characters
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+            We&rsquo;ll read your website to understand what you sell and craft a lead scoring offer.
+          </div>
         </div>
 
         <button
           className="btn btn-primary"
           style={{ width: '100%', justifyContent: 'center', padding: '12px', fontSize: 15 }}
-          onClick={handleAnalyze}
-          disabled={loading || !companyName.trim() || description.trim().length < 20}
+          onClick={handleNext}
+          disabled={loading || !companyName.trim() || !websiteUrl.trim() || !isValidUrl(websiteUrl)}
         >
           {loading ? (
-            <>
-              <span className="spinner" /> Analyzing your ICP…
-            </>
+            <><span className="spinner" /> Analysing your website…</>
           ) : (
-            <>Analyze my ICP →</>
+            <>Continue →</>
           )}
         </button>
       </div>
@@ -135,110 +280,224 @@ function StepDescribe({ slug, onNext }: { slug: string; onNext: (params: ICPPara
   )
 }
 
-// ── Tag editor ────────────────────────────────────────────────────────────────
-function TagGroup({
-  label,
-  tags,
-  onChange,
-}: {
-  label: string
-  tags: string[]
-  onChange: (tags: string[]) => void
-}) {
-  const [adding, setAdding] = useState(false)
-  const [inputVal, setInputVal] = useState('')
+// ── Step 2: What do you sell? ──────────────────────────────────────────────────
 
-  function remove(tag: string) {
-    onChange(tags.filter((t) => t !== tag))
+function StepServices({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const store = useOnboardingStore()
+  const [services, setServicesLocal] = useState<string[]>([])
+  const [offerDescription, setOfferDescription] = useState('')
+
+  useEffect(() => {
+    const s = useOnboardingStore.getState()
+    setServicesLocal(s.services.length > 0 ? s.services : [])
+    setOfferDescription(s.offerDescription)
+  }, [])
+
+  function toggle(id: string) {
+    setServicesLocal((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
   }
 
-  function add() {
-    if (inputVal.trim() && !tags.includes(inputVal.trim())) {
-      onChange([...tags, inputVal.trim()])
+  function handleNext() {
+    if (services.length === 0) {
+      toast.error('Select at least one service you offer.')
+      return
     }
-    setInputVal('')
-    setAdding(false)
+    store.setServices(services)
+    store.setOfferDescription(offerDescription.trim())
+    store.setStep(3)
+    onNext()
   }
+
+  const selectedServices = SERVICES.filter((s) => services.includes(s.id))
+  const canAdvance = services.length > 0
 
   return (
-    <div style={{ marginBottom: 20 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)', marginBottom: 8 }}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {tags.map((tag) => (
-          <span key={tag} className="tag" style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
-            {tag}
-            <button
-              onClick={() => remove(tag)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: '0 2px', fontSize: 12, lineHeight: 1 }}
-            >
-              ×
-            </button>
-          </span>
-        ))}
-        {adding ? (
-          <input
-            autoFocus
-            value={inputVal}
-            onChange={(e) => setInputVal(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') add()
-              if (e.key === 'Escape') { setAdding(false); setInputVal('') }
-            }}
-            onBlur={add}
+    <div className="page-enter" style={{ maxWidth: 680, margin: '0 auto', padding: '40px 0' }}>
+      <div style={{ marginBottom: 32 }}>
+        <div style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase' as const,
+          color: 'var(--text-3)',
+          marginBottom: 10,
+          fontFamily: 'DM Mono, monospace',
+        }}>
+          Step 2 of 5
+        </div>
+        <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.5px', marginBottom: 8 }}>
+          What do you sell?
+        </h1>
+        <p style={{ fontSize: 15, color: 'var(--text-3)', lineHeight: 1.6, maxWidth: 520 }}>
+          Yuzuu scores leads based on your specific offer — not generic data. Tell us what you do
+          and we&rsquo;ll only surface businesses that actually need it.
+        </p>
+      </div>
+
+      {/* Service pills */}
+      <div className="card" style={{ padding: 24, marginBottom: 16 }}>
+        <label className="form-label" style={{ marginBottom: 12 }}>Services you offer</label>
+        <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 8 }}>
+          {SERVICES.map((s) => (
+            <SelectionPill
+              key={s.id}
+              label={s.label}
+              selected={services.includes(s.id)}
+              onClick={() => toggle(s.id)}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Scoring signals panel */}
+      {selectedServices.length > 0 && (
+        <div className="page-enter card" style={{
+          padding: '16px 20px',
+          marginBottom: 16,
+          borderLeft: '3px solid var(--accent)',
+        }}>
+          <div style={{
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase' as const,
+            color: 'var(--text-3)',
+            fontFamily: 'DM Mono, monospace',
+            marginBottom: 10,
+          }}>
+            Scoring signals activated
+          </div>
+          {selectedServices.map((s) => (
+            <div key={s.id} style={{
+              display: 'flex',
+              gap: 8,
+              fontSize: 13,
+              color: 'var(--text-2)',
+              marginBottom: 6,
+              lineHeight: 1.5,
+            }}>
+              <span style={{ color: 'var(--accent)', flexShrink: 0 }}>→</span>
+              <span>
+                <span style={{ fontWeight: 500, color: 'var(--text-1)' }}>{s.label}:</span>
+                {' '}{s.signal}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Offer description review */}
+      {offerDescription && (
+        <div className="card" style={{ padding: 24, marginBottom: 16 }}>
+          <label className="form-label" style={{ marginBottom: 8 }}>
+            Your offer description
+            <span style={{ color: 'var(--text-3)', fontWeight: 400, marginLeft: 6 }}>
+              — extracted from your website, edit if needed
+            </span>
+          </label>
+          <textarea
             className="form-input"
-            style={{ height: 28, padding: '0 8px', fontSize: 12.5, width: 120 }}
-            placeholder="Add…"
+            value={offerDescription}
+            onChange={(e) => setOfferDescription(e.target.value)}
+            style={{ height: 90, resize: 'vertical' as const, padding: 10, lineHeight: 1.6 }}
           />
-        ) : (
-          <button
-            className="btn btn-ghost btn-sm"
-            style={{ fontSize: 12, padding: '3px 8px', border: '1px dashed var(--border-2)' }}
-            onClick={() => setAdding(true)}
-          >
-            + Add
-          </button>
-        )}
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+            This is used by AI to score leads and write outreach emails.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+        <button
+          className="btn btn-secondary"
+          onClick={onBack}
+        >
+          ← Back
+        </button>
+        <button
+          className="btn btn-primary"
+          style={{ flex: 1, justifyContent: 'center', padding: '12px', fontSize: 15 }}
+          onClick={handleNext}
+          disabled={!canAdvance}
+        >
+          Set my scoring signals →
+        </button>
       </div>
     </div>
   )
 }
 
-// ── Step 2: Review Parameters ─────────────────────────────────────────────────
-function StepReview({
-  initialParams,
-  onBuild,
+// ── Step 3: Where's your market? ──────────────────────────────────────────────
+
+function StepMarket({
+  slug,
+  onBack,
+  onStartRedirect,
 }: {
-  initialParams: ICPParams
-  onBuild: (jobId: string) => void
+  slug: string
+  onBack: () => void
+  onStartRedirect: () => void
 }) {
-  const [params, setParams] = useState(initialParams)
+  const store = useOnboardingStore()
+  const router = useRouter()
+  const [niches, setNichesLocal] = useState<string[]>([])
+  const [location, setLocation] = useState('')
   const [loading, setLoading] = useState(false)
-  const [description, setDescription] = useState('')
 
   useEffect(() => {
-    const stored = useOnboardingStore.getState().description
-    if (stored) setDescription(stored)
+    const s = useOnboardingStore.getState()
+    setNichesLocal(s.niches.length > 0 ? s.niches : [])
+    setLocation(s.location)
   }, [])
 
-  const update = (key: keyof ICPParams) => (tags: string[]) =>
-    setParams((p) => ({ ...p, [key]: tags }))
+  function toggleNiche(niche: string) {
+    setNichesLocal((prev) =>
+      prev.includes(niche) ? prev.filter((x) => x !== niche) : [...prev, niche]
+    )
+  }
 
-  async function handleBuild() {
+  const selectedServiceLabels = SERVICES
+    .filter((s) => store.services.includes(s.id))
+    .map((s) => s.label)
+
+  const canAdvance = niches.length > 0 && location.trim().length > 1
+
+  async function handleSave() {
+    if (!canAdvance) {
+      toast.error('Select at least one business type and enter a location.')
+      return
+    }
+
+    store.setNiches(niches)
+    store.setLocation(location.trim())
+
     setLoading(true)
     try {
-      const res = await fetch('/api/tam/build', {
+      const res = await fetch('/api/workspace/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description, params }),
+        body: JSON.stringify({
+          offer_description: store.offerDescription || `Agency offering ${store.services.join(', ')} services`,
+          brand_website_url: store.websiteUrl || null,
+          icp_services: store.services,
+          icp_niches: niches,
+          icp_city: location.trim(),
+        }),
       })
-
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Failed to start build')
+      if (!res.ok) throw new Error(data.error ?? 'Failed to save profile')
 
-      toast.info('TAM build started')
-      onBuild(data.job_id)
+      // Fire the agent in the background — don't await so navigation is instant.
+      // The leads page will receive new leads via Supabase Realtime as they arrive.
+      fetch('/api/agent/run', { method: 'POST' }).catch(() => null)
+
+      onStartRedirect()
+      store.reset()
+      router.push(`/${slug}/leads`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to start TAM build')
+      toast.error(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
       setLoading(false)
     }
@@ -246,279 +505,250 @@ function StepReview({
 
   return (
     <div className="page-enter" style={{ maxWidth: 680, margin: '0 auto', padding: '40px 0' }}>
-      <div style={{ textAlign: 'center', marginBottom: 40 }}>
-        <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>
+      <div style={{ marginBottom: 32 }}>
+        <div style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase' as const,
+          color: 'var(--text-3)',
+          marginBottom: 10,
+          fontFamily: 'DM Mono, monospace',
+        }}>
+          Step 3 of 3
+        </div>
         <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.5px', marginBottom: 8 }}>
-          Review your ICP parameters
+          Where&rsquo;s your market?
         </h1>
-        <p style={{ fontSize: 15, color: 'var(--text-3)' }}>
-          AI extracted these from your description. Edit, add or remove tags as needed.
+        <p style={{ fontSize: 15, color: 'var(--text-3)', lineHeight: 1.6, maxWidth: 520 }}>
+          Pick the business type(s) and location. Yuzuu will scan that market and surface the ones that
+          need your services most.
         </p>
       </div>
 
-      <div className="card" style={{ padding: 28, marginBottom: 20 }}>
-        <TagGroup label="Industries" tags={params.industries} onChange={update('industries')} />
-        <TagGroup label="Company size (employee ranges)" tags={params.employee_ranges} onChange={update('employee_ranges')} />
-        <TagGroup label="Geography" tags={params.locations} onChange={update('locations')} />
-        <TagGroup label="Tech stack" tags={params.technologies} onChange={update('technologies')} />
-        <TagGroup label="Funding stages" tags={params.funding_stages} onChange={update('funding_stages')} />
-        <TagGroup label="Intent keywords" tags={params.keywords} onChange={update('keywords')} />
-      </div>
-
-      <button
-        className="btn btn-primary"
-        style={{ width: '100%', justifyContent: 'center', padding: '12px', fontSize: 15 }}
-        onClick={handleBuild}
-        disabled={loading}
-      >
-        {loading ? 'Starting build…' : 'Build my TAM →'}
-      </button>
-    </div>
-  )
-}
-
-// ── Step 3: Building Screen ───────────────────────────────────────────────────
-interface BuildStep {
-  key: 'finding' | 'enriching' | 'scoring'
-  label: string
-  icon: string
-}
-
-const BUILD_STEPS: BuildStep[] = [
-  { key: 'finding',   label: 'Finding companies matching your ICP', icon: '🔍' },
-  { key: 'enriching', label: 'Enriching with contacts',             icon: '👥' },
-  { key: 'scoring',   label: 'Scoring accounts with AI',            icon: '✨' },
-]
-
-function StepBuilding({ jobId, slug }: { jobId: string; slug: string }) {
-  const router = useRouter()
-  const { updateStatus } = useTamBuildStore()
-
-  const [status, setStatus] = useState<'running' | 'complete' | 'error'>('running')
-  const [steps, setSteps] = useState({
-    finding:   { done: false, count: 0 },
-    enriching: { done: false, count: 0 },
-    scoring:   { done: false, count: 0 },
-  })
-  const [totalAccounts, setTotalAccounts] = useState(0)
-  const [planLimit, setPlanLimit] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [elapsed, setElapsed] = useState(0)
-
-  const poll = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/tam/build/status?job_id=${jobId}`)
-      const data = await res.json()
-
-      setStatus(data.status)
-      setSteps(data.steps)
-      setTotalAccounts(data.total_accounts)
-      if (data.plan_limit) setPlanLimit(data.plan_limit)
-      updateStatus({
-        status: data.status,
-        steps: data.steps,
-        total_accounts: data.total_accounts,
-        error: data.error ?? null,
-      })
-
-      if (data.status === 'error') {
-        setError(data.error ?? 'An error occurred during the build.')
-        toast.error(data.error ?? 'TAM build failed')
-      }
-
-      if (data.status === 'complete') {
-        toast.success(`TAM build complete — ${data.total_accounts} accounts ready`, {
-          action: { label: 'View TAM', onClick: () => router.push(`/${slug}/tam`) },
-        })
-        useTamBuildStore.getState().reset()
-        useOnboardingStore.getState().reset()
-        setTimeout(() => router.push(`/${slug}/tam`), 1500)
-      }
-    } catch {
-      // Ignore polling errors
-    }
-  }, [jobId, slug, router, updateStatus])
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (status !== 'running') return
-      poll()
-      setElapsed((e) => e + 2)
-    }, 2000)
-    poll()
-    return () => clearInterval(interval)
-  }, [poll, status])
-
-  const activeStep = steps.finding.done
-    ? steps.enriching.done
-      ? 'scoring'
-      : 'enriching'
-    : 'finding'
-
-  return (
-    <div
-      className="page-enter"
-      style={{ maxWidth: 560, margin: '0 auto', padding: '60px 0', textAlign: 'center' }}
-    >
-      <div style={{ fontSize: 40, marginBottom: 16 }}>🚀</div>
-      <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.5px', marginBottom: 8 }}>
-        {status === 'complete' ? 'TAM built!' : status === 'error' ? 'Build failed' : 'Building your TAM…'}
-      </h1>
-      <p style={{ fontSize: 14, color: 'var(--text-3)', marginBottom: 40 }}>
-        {status === 'running' && `~2 minutes · ${elapsed}s elapsed`}
-        {status === 'complete' && `${totalAccounts} accounts found. Redirecting…`}
-        {status === 'error' && 'Something went wrong.'}
-      </p>
-
-      {error && (
-        <div className="auth-error" style={{ textAlign: 'left', marginBottom: 24 }}>
-          {error}
-        </div>
-      )}
-
-      <div className="card" style={{ padding: 28, textAlign: 'left' }}>
-        {BUILD_STEPS.map((s) => {
-          const step = steps[s.key]
-          const isActive = activeStep === s.key && status === 'running'
-          const progress = s.key === 'finding'
-            ? step.done ? 100 : 10
-            : s.key === 'enriching'
-            ? step.done ? 100 : steps.finding.done ? 40 : 0
-            : step.done ? 100 : steps.enriching.done ? 20 : 0
-
-          return (
-            <div key={s.key} style={{ marginBottom: 24 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                <span style={{ fontSize: 16 }}>
-                  {step.done ? '✅' : isActive ? s.icon : '⏳'}
-                </span>
-                <span style={{ fontSize: 13.5, fontWeight: 500, flex: 1 }}>{s.label}</span>
-                {step.count > 0 && (
-                  <span style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'DM Mono, monospace' }}>
-                    {step.count}
-                  </span>
-                )}
-              </div>
-              <div style={{ height: 6, background: 'var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                <div
-                  style={{
-                    height: '100%',
-                    width: `${progress}%`,
-                    background: step.done ? 'var(--green)' : isActive ? 'var(--accent)' : 'var(--border-2)',
-                    borderRadius: 8,
-                    transition: 'width 0.6s ease',
-                  }}
-                />
-              </div>
-            </div>
-          )
-        })}
-
-        {steps.finding.count > 0 && status === 'running' && (
-          <div style={{ fontSize: 12.5, color: 'var(--text-3)', textAlign: 'center', marginTop: 8 }}>
-            Found {steps.finding.count} accounts so far…
-          </div>
-        )}
-      </div>
-
-      {/* Free trial limit banner */}
-      {planLimit !== null && planLimit <= 25 && (
-        <div style={{
-          marginTop: 20, padding: '14px 18px', borderRadius: 10,
-          background: 'linear-gradient(135deg, #fef9ec 0%, #fff8e6 100%)',
-          border: '1px solid #f5c842', display: 'flex', alignItems: 'center', gap: 12,
-        }}>
-          <span style={{ fontSize: 18 }}>⚡</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: '#92660a' }}>
-              Free trial — limited to {planLimit} accounts
-            </div>
-            <div style={{ fontSize: 12, color: '#b07c1a', marginTop: 2 }}>
-              Upgrade to Starter to unlock 200 accounts + 3 contacts each
-            </div>
-          </div>
-          <Link
-            href={`/${slug}/settings/billing`}
-            style={{ fontSize: 12.5, fontWeight: 600, color: '#92660a', textDecoration: 'none',
-              padding: '5px 12px', borderRadius: 6, border: '1px solid #f5c842', background: '#fffbf0',
-              whiteSpace: 'nowrap' }}
+      {/* Niche multi-select */}
+      <div className="card" style={{ padding: 24, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <label className="form-label" style={{ marginBottom: 0 }}>Business type / niche</label>
+          <button
+            type="button"
+            onClick={() => {
+              const allNiches = [...NICHES, ...niches.filter((n) => !NICHES.includes(n))]
+              const allSelected = allNiches.every((n) => niches.includes(n))
+              setNichesLocal(allSelected ? [] : allNiches)
+            }}
+            style={{
+              fontSize: 12,
+              color: 'var(--text-3)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 0,
+              fontFamily: 'DM Sans, sans-serif',
+            }}
           >
-            Upgrade →
-          </Link>
+            {[...NICHES, ...niches.filter((n) => !NICHES.includes(n))].every((n) => niches.includes(n))
+              ? 'Deselect all'
+              : 'Select all'}
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 8 }}>
+          {[...NICHES, ...niches.filter((n) => !NICHES.includes(n))].map((n) => (
+            <SelectionPill
+              key={n}
+              label={n}
+              selected={niches.includes(n)}
+              onClick={() => toggleNiche(n)}
+            />
+          ))}
+          <AddCustomNiche onAdd={(v) => {
+            if (!niches.includes(v)) setNichesLocal((prev) => [...prev, v])
+          }} />
+        </div>
+      </div>
+
+      {/* Location */}
+      <div className="card" style={{ padding: 24, marginBottom: 16 }}>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label">City, area or country</label>
+          <input
+            className="form-input"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Paris, Île de France, France…"
+            onKeyDown={(e) => e.key === 'Enter' && !loading && canAdvance && handleSave()}
+          />
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+            Enter a city for local targeting or a country for broader reach.
+          </div>
+        </div>
+      </div>
+
+      {/* Preview confirmation */}
+      {canAdvance && (
+        <div className="page-enter card" style={{
+          padding: '16px 20px',
+          marginBottom: 16,
+          borderLeft: '3px solid var(--accent)',
+        }}>
+          <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.8 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ color: 'var(--accent)' }}>→</span>
+              <span>
+                Scanning:{' '}
+                <strong style={{ color: 'var(--text-1)' }}>{niches.join(', ')}</strong>
+                {' '}in <strong style={{ color: 'var(--text-1)' }}>{location.trim()}</strong>
+              </span>
+            </div>
+            {selectedServiceLabels.length > 0 && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <span style={{ color: 'var(--accent)' }}>→</span>
+                <span>Scoring for: {selectedServiceLabels.join(', ')}</span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {status === 'error' && (
+      <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
         <button
           className="btn btn-secondary"
-          style={{ marginTop: 20 }}
-          onClick={() => window.location.reload()}
+          onClick={onBack}
+          disabled={loading}
         >
-          Adjust your ICP
+          ← Back
         </button>
-      )}
+        <button
+          className="btn btn-primary"
+          style={{ flex: 1, justifyContent: 'center', padding: '12px', fontSize: 15 }}
+          onClick={handleSave}
+          disabled={!canAdvance || loading}
+        >
+          {loading ? (
+            <><span className="spinner" /> Building your lead list…</>
+          ) : (
+            <>Get leads built for my offer →</>
+          )}
+        </button>
+      </div>
     </div>
   )
 }
 
-// ── Main Wizard ───────────────────────────────────────────────────────────────
-export function OnboardingWizard({ slug }: Props) {
-  const { step, jobId, params, setStep, setJobId, setParams, reset } = useOnboardingStore()
+// ── Main Wizard ────────────────────────────────────────────────────────────────
 
-  const steps = [
-    { n: 1, label: 'Describe' },
-    { n: 2, label: 'Review' },
-    { n: 3, label: 'Build' },
+export function OnboardingWizard({ slug }: Props) {
+  const { step, setStep } = useOnboardingStore()
+  const [redirecting, setRedirecting] = useState(false)
+
+  const STEPS = [
+    { n: 1, label: 'Workspace' },
+    { n: 2, label: 'Services' },
+    { n: 3, label: 'Market' },
   ]
+
+  if (redirecting) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        minHeight: '60vh', gap: 12, color: 'var(--text-3)', fontSize: 15,
+      }}>
+        <span className="spinner" style={{ borderColor: 'rgba(0,0,0,0.12)', borderTopColor: 'var(--accent)' }} />
+        Building your lead list…
+      </div>
+    )
+  }
 
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
       {/* Step indicator */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0, marginBottom: 8, paddingTop: 32 }}>
-        {steps.map((s, i) => (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 0,
+        marginBottom: 8,
+        paddingTop: 32,
+        flexWrap: 'wrap' as const,
+      }}>
+        {STEPS.map((s, i) => (
           <div key={s.n} style={{ display: 'flex', alignItems: 'center' }}>
             <div style={{
-              width: 28, height: 28, borderRadius: '50%',
-              background: step >= s.n ? 'var(--accent)' : 'var(--border)',
+              width: 26,
+              height: 26,
+              borderRadius: '50%',
+              background: step > s.n ? 'var(--accent)' : step === s.n ? 'var(--accent)' : 'var(--border)',
               color: step >= s.n ? 'white' : 'var(--text-3)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 12, fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 11,
+              fontWeight: 600,
+              flexShrink: 0,
+              transition: 'all 0.2s',
             }}>
-              {step > s.n ? <Icon d={Icons.check} size={12} /> : s.n}
+              {step > s.n ? <Icon d={Icons.check} size={11} /> : s.n}
             </div>
-            <span style={{ fontSize: 12.5, fontWeight: step === s.n ? 600 : 400, color: step >= s.n ? 'var(--text-1)' : 'var(--text-3)', margin: '0 8px' }}>
+            <span style={{
+              fontSize: 12,
+              fontWeight: step === s.n ? 600 : 400,
+              color: step >= s.n ? 'var(--text-1)' : 'var(--text-3)',
+              margin: '0 6px',
+              whiteSpace: 'nowrap' as const,
+            }}>
               {s.label}
             </span>
-            {i < steps.length - 1 && (
-              <div style={{ width: 40, height: 1, background: 'var(--border)', margin: '0 4px' }} />
+            {i < STEPS.length - 1 && (
+              <div style={{
+                width: 28,
+                height: 1,
+                background: step > s.n ? 'var(--accent)' : 'var(--border)',
+                margin: '0 2px',
+                transition: 'background 0.2s',
+              }} />
             )}
           </div>
         ))}
       </div>
 
       {step === 1 && (
-        <StepDescribe
+        <StepBrand
           slug={slug}
-          onNext={(p) => {
-            setParams(p)
-            setStep(2)
-          }}
+          onNext={() => setStep(2)}
         />
       )}
 
-      {step === 2 && params && (
-        <StepReview
-          initialParams={params}
-          onBuild={(id) => {
-            setJobId(id)
-            setStep(3)
-          }}
+      {step === 2 && (
+        <StepServices
+          onNext={() => setStep(3)}
+          onBack={() => setStep(1)}
         />
       )}
 
-      {step === 3 && jobId && (
-        <StepBuilding jobId={jobId} slug={slug} />
+      {step === 3 && (
+        <StepMarket
+          slug={slug}
+          onBack={() => setStep(2)}
+          onStartRedirect={() => setRedirecting(true)}
+        />
       )}
+
+      {/* Bottom progress bar */}
+      <div style={{
+        position: 'fixed',
+        bottom: 0, left: 0, right: 0,
+        height: 2,
+        background: 'var(--border)',
+        zIndex: 10,
+      }}>
+        <div style={{
+          height: '100%',
+          width: `${((step - 1) / STEPS.length) * 100}%`,
+          background: 'var(--accent)',
+          transition: 'width 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+        }} />
+      </div>
     </div>
   )
 }
+

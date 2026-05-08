@@ -21,17 +21,15 @@ export default async function OnboardingPage({ params }: Props) {
 
   if (!dbUser) redirect('/login')
 
-  // If workspace already has a completed TAM build, skip onboarding
-  const { data: completedBuild } = await supabase
-    .from('tam_build_jobs')
-    .select('id')
-    .eq('workspace_id', dbUser.workspace_id)
-    .eq('status', 'complete')
-    .limit(1)
-    .maybeSingle()
+  // If workspace already has an offer_description, onboarding is done
+  const { data: ws } = await supabase
+    .from('workspaces')
+    .select('offer_description')
+    .eq('id', dbUser.workspace_id)
+    .single()
 
-  if (completedBuild) {
-    redirect(`/${slug}/tam`)
+  if (ws?.offer_description) {
+    redirect(`/${slug}/leads`)
   }
 
   return <OnboardingWizard slug={slug} />

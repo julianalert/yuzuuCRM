@@ -25,6 +25,16 @@ export type Database = {
           logo_url: string | null
           apollo_api_key: string | null
           anthropic_api_key: string | null
+          offer_description: string | null
+          brand_website_url: string | null
+          icp_category: string | null
+          icp_city: string | null
+          icp_country: string | null
+          icp_services: string[] | null
+          icp_niches: string[] | null
+          enrichment_credits: number
+          agent_search_plan: Json | null
+          agent_profile_hash: string | null
           created_at: string
           updated_at: string
         }
@@ -43,6 +53,16 @@ export type Database = {
           logo_url?: string | null
           apollo_api_key?: string | null
           anthropic_api_key?: string | null
+          offer_description?: string | null
+          brand_website_url?: string | null
+          icp_category?: string | null
+          icp_city?: string | null
+          icp_country?: string | null
+          icp_services?: string[] | null
+          icp_niches?: string[] | null
+          enrichment_credits?: number
+          agent_search_plan?: Json | null
+          agent_profile_hash?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -515,6 +535,230 @@ export type Database = {
             columns: ['workspace_id']
             isOneToOne: false
             referencedRelation: 'workspaces'
+            referencedColumns: ['id']
+          }
+        ]
+      }
+      workspace_members: {
+        Row: {
+          user_id: string
+          workspace_id: string
+          role: 'owner' | 'admin' | 'member'
+          joined_at: string
+        }
+        Insert: {
+          user_id: string
+          workspace_id: string
+          role?: 'owner' | 'admin' | 'member'
+          joined_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['workspace_members']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'workspace_members_workspace_id_fkey'
+            columns: ['workspace_id']
+            isOneToOne: false
+            referencedRelation: 'workspaces'
+            referencedColumns: ['id']
+          }
+        ]
+      }
+      lead_searches: {
+        Row: {
+          id: string
+          workspace_id: string
+          user_id: string | null
+          category: string | null
+          city: string | null
+          country: string | null
+          offer_description: string | null
+          status: 'pending' | 'running' | 'done' | 'error'
+          result_count: number | null
+          apify_run_id: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          workspace_id: string
+          user_id?: string | null
+          category?: string | null
+          city?: string | null
+          country?: string | null
+          offer_description?: string | null
+          status?: 'pending' | 'running' | 'done' | 'error'
+          result_count?: number | null
+          apify_run_id?: string | null
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['lead_searches']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'lead_searches_workspace_id_fkey'
+            columns: ['workspace_id']
+            isOneToOne: false
+            referencedRelation: 'workspaces'
+            referencedColumns: ['id']
+          }
+        ]
+      }
+      leads: {
+        Row: {
+          id: string
+          search_id: string
+          workspace_id: string
+          name: string | null
+          category: string | null
+          address: string | null
+          phone: string | null
+          website: string | null
+          rating: number | null
+          review_count: number | null
+          google_maps_url: string | null
+          place_id: string | null
+          surface_score: number | null
+          enrichment_status: 'none' | 'loading' | 'done' | 'error'
+          enriched_at: string | null
+          website_tech: Json | null
+          website_quality_score: number | null
+          has_booking_system: boolean | null
+          has_social_presence: boolean | null
+          social_links: Json | null
+          review_sentiment: 'positive' | 'mixed' | 'negative' | null
+          last_review_date: string | null
+          owner_response_rate: number | null
+          opportunity_score: number | null
+          score_reasoning: string | null
+          outreach_email: string | null
+          discovered_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          search_id: string
+          workspace_id: string
+          name?: string | null
+          category?: string | null
+          address?: string | null
+          phone?: string | null
+          website?: string | null
+          rating?: number | null
+          review_count?: number | null
+          google_maps_url?: string | null
+          place_id?: string | null
+          surface_score?: number | null
+          enrichment_status?: 'none' | 'loading' | 'done' | 'error'
+          enriched_at?: string | null
+          website_tech?: Json | null
+          website_quality_score?: number | null
+          has_booking_system?: boolean | null
+          has_social_presence?: boolean | null
+          social_links?: Json | null
+          review_sentiment?: 'positive' | 'mixed' | 'negative' | null
+          last_review_date?: string | null
+          owner_response_rate?: number | null
+          opportunity_score?: number | null
+          score_reasoning?: string | null
+          outreach_email?: string | null
+          discovered_at?: string | null
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['leads']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'leads_search_id_fkey'
+            columns: ['search_id']
+            isOneToOne: false
+            referencedRelation: 'lead_searches'
+            referencedColumns: ['id']
+          }
+        ]
+      }
+      agent_runs: {
+        Row: {
+          id: string
+          workspace_id: string
+          search_query: string
+          location_query: string
+          fingerprint: string
+          leads_found: number
+          leads_enriched: number
+          status: string
+          error_message: string | null
+          ran_at: string
+        }
+        Insert: {
+          id?: string
+          workspace_id: string
+          search_query: string
+          location_query: string
+          fingerprint: string
+          leads_found?: number
+          leads_enriched?: number
+          status?: string
+          error_message?: string | null
+          ran_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['agent_runs']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'agent_runs_workspace_id_fkey'
+            columns: ['workspace_id']
+            isOneToOne: false
+            referencedRelation: 'workspaces'
+            referencedColumns: ['id']
+          }
+        ]
+      }
+      ai_chats: {
+        Row: {
+          id: string
+          workspace_id: string
+          user_id: string | null
+          title: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          workspace_id: string
+          user_id?: string | null
+          title?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['ai_chats']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'ai_chats_workspace_id_fkey'
+            columns: ['workspace_id']
+            isOneToOne: false
+            referencedRelation: 'workspaces'
+            referencedColumns: ['id']
+          }
+        ]
+      }
+      ai_messages: {
+        Row: {
+          id: string
+          chat_id: string
+          role: 'user' | 'assistant'
+          content: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          chat_id: string
+          role: 'user' | 'assistant'
+          content: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['ai_messages']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'ai_messages_chat_id_fkey'
+            columns: ['chat_id']
+            isOneToOne: false
+            referencedRelation: 'ai_chats'
             referencedColumns: ['id']
           }
         ]

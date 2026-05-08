@@ -82,6 +82,12 @@ export async function signUp(formData: FormData) {
     return { error: 'Failed to create user profile.' }
   }
 
+  await serviceClient.from('workspace_members').insert({
+    user_id: authData.user.id,
+    workspace_id: workspace.id,
+    role: 'owner',
+  })
+
   redirect(`/${slug}/dashboard`)
 }
 

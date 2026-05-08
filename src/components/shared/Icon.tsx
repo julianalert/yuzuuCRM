@@ -40,6 +40,7 @@ export function Icon({
 export const Icons = {
   dashboard:    "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z",
   tam:          "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2 M9 11a4 4 0 100-8 4 4 0 000 8 M23 21v-2a4 4 0 00-3-3.87 M16 3.13a4 4 0 010 7.75",
+  leads:        ["M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z", "M12 10m-3 0a3 3 0 106 0 3 3 0 10-6 0"] as readonly string[],
   signals:      "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
   sequences:    "M22 12h-4l-3 9L9 3l-3 9H2",
   pipeline:     ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M14 14h7v7h-7z", "M3 14h7v7H3z"] as readonly string[],

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { SettingsLayout } from '@/components/layout/SettingsLayout'
 import { useWorkspace } from '@/hooks/useWorkspace'
@@ -10,21 +9,24 @@ import { format, differenceInDays } from 'date-fns'
 
 interface UsageData {
   seats: number
-  accounts: number
+  leads: number
 }
 
-const PLAN_CARDS: { key: PlanName; features: string[] }[] = [
+const PLAN_CARDS: { key: PlanName; tagline: string; features: string[] }[] = [
   {
     key: 'starter',
-    features: ['1 seat', '500 accounts', '1 sequence', 'Pipeline', 'AI scoring'],
+    tagline: 'Perfect for solo or small agency founders who are tired of spending hours building lead lists every week.',
+    features: ['1 seat', '500 leads', '1 sequence', 'Pipeline', 'AI scoring'],
   },
   {
     key: 'growth',
-    features: ['5 seats', '5,000 accounts', '10 sequences', 'Pipeline', 'AI scoring'],
+    tagline: 'Perfect for growing agencies ready to build a repeatable outbound engine and stop the guesswork.',
+    features: ['5 seats', '5,000 leads', '10 sequences', 'Pipeline', 'AI scoring'],
   },
   {
     key: 'enterprise',
-    features: ['15 seats', '25,000 accounts', 'Unlimited sequences', 'Pipeline', 'AI scoring'],
+    tagline: 'Perfect for established agencies scaling outbound across the whole team with full visibility.',
+    features: ['15 seats', '25,000 leads', 'Unlimited sequences', 'Pipeline', 'AI scoring'],
   },
 ]
 
@@ -32,7 +34,6 @@ const PLAN_ORDER: PlanName[] = ['free', 'starter', 'growth', 'enterprise']
 
 export default function BillingPage() {
   const workspace = useWorkspace()
-  const router = useRouter()
   const [usage, setUsage] = useState<UsageData | null>(null)
   const [loadingPortal, setLoadingPortal] = useState(false)
   const [loadingCheckout, setLoadingCheckout] = useState<string | null>(null)
@@ -42,7 +43,7 @@ export default function BillingPage() {
     fetch('/api/billing/usage')
       .then(r => r.json())
       .then((d: UsageData) => setUsage(d))
-      .catch(() => setUsage({ seats: 0, accounts: 0 }))
+      .catch(() => setUsage({ seats: 0, leads: 0 }))
   }, [workspace])
 
   if (!workspace) return null
@@ -104,25 +105,11 @@ export default function BillingPage() {
   }
 
   const seatUsed = usage?.seats ?? 0
-  const accountUsed = usage?.accounts ?? 0
+  const leadUsed = usage?.leads ?? 0
 
   return (
     <SettingsLayout>
       {/* Status banners */}
-      {status === 'trialing' && trialDaysLeft !== null && (
-        <div style={{
-          background: 'var(--amber-bg)', border: '1px solid #F0D090', borderRadius: 'var(--radius)',
-          padding: '10px 16px', fontSize: 13, marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}>
-          <span style={{ color: 'var(--amber)' }}>
-            ⏱ <strong>{trialDaysLeft} day{trialDaysLeft !== 1 ? 's' : ''}</strong> left in your trial
-          </span>
-          <button className="btn btn-sm" style={{ background: 'var(--amber)', color: 'white' }} onClick={() => handleUpgrade('starter')}>
-            Add payment method →
-          </button>
-        </div>
-      )}
-
       {status === 'past_due' && (
         <div style={{
           background: 'var(--red-bg)', border: '1px solid #E8B0B0', borderRadius: 'var(--radius)',
@@ -165,7 +152,7 @@ export default function BillingPage() {
             <div>
               <div style={{ fontWeight: 600, fontSize: 15 }}>{planInfo.label} Plan</div>
               <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
-                {planInfo.price === 0 ? 'Free' : `$${planInfo.price}/month`} · {limits.seats} seat{limits.seats !== 1 ? 's' : ''} · {limits.accounts.toLocaleString()} accounts
+                {planInfo.price === 0 ? 'Free' : `$${planInfo.price}/month`} · {limits.seats} seat{limits.seats !== 1 ? 's' : ''} · {limits.accounts.toLocaleString()} leads
               </div>
             </div>
             <span style={{
@@ -181,7 +168,7 @@ export default function BillingPage() {
           <div style={{ display: 'flex', gap: 16 }}>
             {[
               { label: 'Seats used', used: seatUsed, total: limits.seats },
-              { label: 'Accounts', used: accountUsed, total: limits.accounts },
+              { label: 'Leads', used: leadUsed, total: limits.accounts },
             ].map(({ label, used, total }) => (
               <div key={label} style={{ flex: 1, padding: '12px 14px', background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>{label}</div>
@@ -212,7 +199,7 @@ export default function BillingPage() {
         <div className="card-header"><span className="card-title">Plans</span></div>
         <div className="card-body">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            {PLAN_CARDS.map(({ key, features }) => {
+            {PLAN_CARDS.map(({ key, tagline, features }) => {
               const info = PLAN_PRICING[key]
               const isCurrent = key === plan
               const isUpgrade = PLAN_ORDER.indexOf(key) > PLAN_ORDER.indexOf(plan)
@@ -238,6 +225,9 @@ export default function BillingPage() {
                     </div>
                     <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
                       ${info.price}<span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text-3)' }}>/mo</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.5 }}>
+                      {tagline}
                     </div>
                   </div>
                   <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>

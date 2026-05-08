@@ -11,12 +11,12 @@ type PageConfig = [title: string, sep: string | null, sub: string | null]
 
 const pageTitles: Record<string, PageConfig> = {
   dashboard: ['Yuzuu', null, null],
-  tam:       ['Build TAM', '/', '847 accounts'],
-  signals:   ['Signals', '/', '5 new today'],
+  leads:     ['Lead Finder', '/', 'Google Maps'],
+  signals:   ['Signals', null, null],
   sequences: ['Sequences', '/', '3 active'],
   capture:   ['Activity Capture', '/', 'Auto-synced'],
   pipeline:  ['Pipeline', '/', '$278k open'],
-  ask:       ['Ask AI', '/', 'CRO Copilot'],
+  ask:       ['Ask AI', '/', 'AI Copilot'],
   settings:  ['Settings', null, null],
 }
 
@@ -63,6 +63,24 @@ export function Topbar() {
       {sep && <span className="topbar-sep">/</span>}
       {sub && <span className="topbar-sub">{sub}</span>}
       <div className="topbar-right">
+        {workspace.enrichment_credits !== undefined && (
+          <a
+            href={`/${slug}/settings/billing`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              fontSize: 12, fontWeight: 600,
+              color: workspace.enrichment_credits <= 1 ? 'var(--red, #e5534b)' : 'var(--text-2)',
+              background: 'var(--border)', borderRadius: 6,
+              padding: '4px 10px', textDecoration: 'none',
+            }}
+            title="Enrichment credits remaining"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            {workspace.enrichment_credits} {workspace.enrichment_credits === 1 ? 'credit' : 'credits'}
+          </a>
+        )}
         <button className="btn btn-ghost btn-icon">
           <Icon d={Icons.bell} size={16} />
         </button>

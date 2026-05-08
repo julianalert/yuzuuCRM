@@ -35,20 +35,22 @@ export default async function AppLayout({ children, params }: Props) {
     .single()
 
   const workspace = workspaceRaw as Workspace | null
-  if (!workspace || workspace.id !== dbUser.workspace_id) redirect('/login')
+  if (!workspace) redirect('/login')
 
-  // Lock app behind onboarding until first TAM build is complete.
-  // Onboarding itself is excluded via its own nested layout which doesn't
-  // run this check, so we don't need a path-based exception here.
-  const { data: completedBuild } = await supabase
-    .from('tam_build_jobs')
-    .select('id')
+  // Verify the logged-in user is a member of this workspace
+  const { data: membership } = await supabase
+    .from('workspace_members')
+    .select('user_id')
+    .eq('user_id', authUser.id)
     .eq('workspace_id', workspace.id)
-    .eq('status', 'complete')
-    .limit(1)
     .maybeSingle()
 
-  if (!completedBuild) {
+  if (!membership) redirect('/login')
+
+  // Lock app behind onboarding until the workspace has an offer_description set.
+  // Onboarding itself is excluded via its own nested layout which doesn't
+  // run this check, so we don't need a path-based exception here.
+  if (!workspace.offer_description) {
     redirect(`/${slug}/onboarding`)
   }
 

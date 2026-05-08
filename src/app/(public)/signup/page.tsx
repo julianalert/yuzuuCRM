@@ -29,7 +29,6 @@ export default function SignupPage() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="logo-mark">RE</div>
           <span>Yuzuu</span>
         </div>
 

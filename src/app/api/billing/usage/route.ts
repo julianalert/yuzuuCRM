@@ -7,14 +7,14 @@ export async function GET(_req: Request) {
     const { workspace } = await requireAuth()
     const supabase = createServiceClient()
 
-    const [seatsResult, accountsResult] = await Promise.all([
+    const [seatsResult, leadsResult] = await Promise.all([
       supabase.from('users').select('*', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
-      supabase.from('accounts').select('*', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
+      supabase.from('leads').select('*', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
     ])
 
     return NextResponse.json({
       seats: seatsResult.count ?? 0,
-      accounts: accountsResult.count ?? 0,
+      leads: leadsResult.count ?? 0,
     })
   } catch (err) {
     return errorResponse(err)

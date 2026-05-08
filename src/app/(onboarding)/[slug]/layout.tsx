@@ -27,7 +27,17 @@ export default async function OnboardingLayout({ children, params }: Props) {
     .eq('slug', slug)
     .single()
 
-  if (!workspace || workspace.id !== dbUser.workspace_id) redirect('/login')
+  if (!workspace) redirect('/login')
+
+  // Verify the logged-in user is a member of this workspace
+  const { data: membership } = await supabase
+    .from('workspace_members')
+    .select('user_id')
+    .eq('user_id', user.id)
+    .eq('workspace_id', workspace.id)
+    .maybeSingle()
+
+  if (!membership) redirect('/login')
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>

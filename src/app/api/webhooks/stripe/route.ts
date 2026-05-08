@@ -73,6 +73,12 @@ export async function POST(req: Request) {
         }).eq('id', workspaceId)
 
         // Send cancellation notification to owner
+        const { data: workspace } = await supabase
+          .from('workspaces')
+          .select('slug')
+          .eq('id', workspaceId)
+          .single()
+
         const { data: owner } = await supabase
           .from('users')
           .select('email, full_name')
@@ -80,10 +86,10 @@ export async function POST(req: Request) {
           .eq('role', 'owner')
           .single()
 
-        if (owner) {
+        if (owner && workspace) {
           await sendPaymentFailedEmail({
             fullName: owner.full_name,
-            billingPortalUrl: `${process.env.NEXT_PUBLIC_APP_URL}/settings/billing`,
+            billingPortalUrl: `${process.env.NEXT_PUBLIC_APP_URL}/${workspace.slug}/settings/billing`,
             toEmail: owner.email,
           })
         }

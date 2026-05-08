@@ -83,6 +83,12 @@ export async function GET(request: Request) {
         role: invitation.role,
       })
 
+      await serviceClient.from('workspace_members').insert({
+        user_id: user.id,
+        workspace_id: ws.id,
+        role: invitation.role,
+      })
+
       await serviceClient.from('invitations').update({
         status: 'accepted',
         accepted_at: new Date().toISOString(),
@@ -133,6 +139,12 @@ export async function GET(request: Request) {
         `${origin}/login?error=${encodeURIComponent(userInsertError.message)}`
       )
     }
+
+    await serviceClient.from('workspace_members').insert({
+      user_id: user.id,
+      workspace_id: workspace.id,
+      role: 'owner',
+    })
 
     // Fire-and-forget welcome email
     void sendWelcomeEmail({

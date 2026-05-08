@@ -42,7 +42,7 @@ export async function proxy(request: NextRequest) {
       // treat as unauthenticated
     }
 
-    const publicPaths = ['/login', '/signup', '/invite', '/auth']
+    const publicPaths = ['/login', '/signup', '/invite', '/auth', '/api/webhooks']
     const { pathname } = request.nextUrl
     const isPublicPath =
       pathname === '/' ||

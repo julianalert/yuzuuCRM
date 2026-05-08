@@ -1,20 +1,19 @@
 export interface PlanLimits {
-  maxPages: number        // Apollo pages × 25 results each
-  maxCompanies: number    // derived from maxPages
-  contactsPerCompany: number
+  maxLeadsPerSearch: number
+  enrichmentCredits: number  // default credits granted on signup
 }
 
 export function getPlanLimits(plan: string): PlanLimits {
   switch (plan) {
     case 'starter':
-      return { maxPages: 8,  maxCompanies: 200, contactsPerCompany: 3 }
+      return { maxLeadsPerSearch: 50,  enrichmentCredits: 50  }
     case 'growth':
-      return { maxPages: 20, maxCompanies: 500, contactsPerCompany: 5 }
+      return { maxLeadsPerSearch: 100, enrichmentCredits: 200 }
     case 'enterprise':
-      return { maxPages: 40, maxCompanies: 1000, contactsPerCompany: 5 }
+      return { maxLeadsPerSearch: 200, enrichmentCredits: 500 }
     default:
       // free / trialing
-      return { maxPages: 1,  maxCompanies: 25,  contactsPerCompany: 1 }
+      return { maxLeadsPerSearch: 10,  enrichmentCredits: 3   }
   }
 }
 
