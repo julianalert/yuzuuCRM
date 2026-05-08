@@ -11,7 +11,7 @@ const platformNav = [
   { id: 'dashboard',  label: 'Dashboard', icon: Icons.dashboard, badge: null,          comingSoon: false },
   { id: 'leads',      label: 'Leads',     icon: Icons.leads,     badge: null,          comingSoon: false },
   { id: 'signals',    label: 'Signals',   icon: Icons.signals,   badge: null,          comingSoon: false },
-  { id: 'sequences',  label: 'Sequences', icon: Icons.sequences, badge: null,          comingSoon: true  },
+  { id: 'sequences',  label: 'Outbound', icon: Icons.sequences, badge: null,          comingSoon: true  },
   { id: 'pipeline',   label: 'Pipeline',  icon: Icons.pipeline,  badge: null,          comingSoon: false },
 ]
 
