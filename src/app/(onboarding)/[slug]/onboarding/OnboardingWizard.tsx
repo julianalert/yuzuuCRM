@@ -490,8 +490,9 @@ function StepMarket({
       if (!res.ok) throw new Error(data.error ?? 'Failed to save profile')
 
       // Fire the agent in the background — don't await so navigation is instant.
-      // The leads page will receive new leads via Supabase Realtime as they arrive.
-      fetch('/api/agent/run', { method: 'POST' }).catch(() => null)
+      // keepalive: true tells the browser to keep this request alive even after
+      // the page navigates away (critical for production / Vercel).
+      fetch('/api/agent/run', { method: 'POST', keepalive: true }).catch(() => null)
 
       onStartRedirect()
       store.reset()

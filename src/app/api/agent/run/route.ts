@@ -2,12 +2,16 @@ import { NextRequest } from 'next/server'
 import { requireAuth, errorResponse } from '@/lib/api-auth'
 import { runAgentForWorkspace } from '@/lib/agent/run-agent'
 
+// Allow up to 5 minutes — Apify scraping + Claude enrichment can take 30-60s.
+// Requires Vercel Pro or higher; on Hobby the hard cap is 10s.
+export const maxDuration = 300
+
 /**
  * POST /api/agent/run
  *
  * Triggers the autonomous lead agent for the authenticated workspace.
  * Called:
- *  - From OnboardingWizard after profile save (fire-and-forget)
+ *  - From OnboardingWizard after profile save (fire-and-forget, keepalive: true)
  *  - From the cron handler (/api/cron/daily-agent) with service-role context
  *
  * Body (optional):

@@ -2,6 +2,9 @@ import { NextRequest } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { runAgentForWorkspace } from '@/lib/agent/run-agent'
 
+// Allow up to 5 minutes — processes all workspaces sequentially
+export const maxDuration = 300
+
 /**
  * POST /api/cron/daily-agent
  *
