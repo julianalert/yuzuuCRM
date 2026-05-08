@@ -42,7 +42,7 @@ async function buildSystemPrompt(workspaceId: string): Promise<string> {
 
   const dealLines = deals
     .map((d) => {
-      const company = (d.accounts as { name: string } | null)?.name ?? 'Unknown'
+      const company = d.accounts?.name ?? 'Unknown'
       const val = d.value ? `${d.currency ?? 'USD'} ${d.value.toLocaleString()}` : 'no value'
       const health = d.health ? ` [${d.health}]` : ''
       return `  - ${d.name} (${company}) | ${d.stage} | ${val}${health}`
@@ -58,7 +58,7 @@ async function buildSystemPrompt(workspaceId: string): Promise<string> {
 
   const signalLines = signals
     .map((s) => {
-      const company = (s.accounts as { name: string } | null)?.name ?? ''
+      const company = s.accounts?.name ?? ''
       return `  - [${s.type}] ${s.title}${company ? ` (${company})` : ''}`
     })
     .join('\n')

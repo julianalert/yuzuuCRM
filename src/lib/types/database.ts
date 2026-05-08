@@ -329,6 +329,13 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['deals']['Insert']>
         Relationships: [
           {
+            foreignKeyName: 'deals_account_id_fkey'
+            columns: ['account_id']
+            isOneToOne: false
+            referencedRelation: 'accounts'
+            referencedColumns: ['id']
+          },
+          {
             foreignKeyName: 'deals_workspace_id_fkey'
             columns: ['workspace_id']
             isOneToOne: false
@@ -791,6 +798,13 @@ export type Database = {
         }
         Update: Partial<Database['public']['Tables']['signals']['Insert']>
         Relationships: [
+          {
+            foreignKeyName: 'signals_account_id_fkey'
+            columns: ['account_id']
+            isOneToOne: false
+            referencedRelation: 'accounts'
+            referencedColumns: ['id']
+          },
           {
             foreignKeyName: 'signals_workspace_id_fkey'
             columns: ['workspace_id']
