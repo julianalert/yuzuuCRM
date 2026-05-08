@@ -11,6 +11,9 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${origin}/login?error=no_code`)
   }
 
+  // Read the invite_next cookie set by the invite page before OAuth redirect
+  const inviteNext = request.cookies.get('invite_next')?.value
+
   try {
     const supabase = await createClient()
 
@@ -26,6 +29,14 @@ export async function GET(request: Request) {
     if (userError || !user) {
       console.error('[auth/callback] getUser error:', userError?.message)
       return NextResponse.redirect(`${origin}/login?error=user_not_found`)
+    }
+
+    // If the user came from an invite page, redirect back there so the page
+    // can auto-accept the invitation now that the session is established.
+    if (inviteNext && inviteNext.startsWith('/invite/')) {
+      const response = NextResponse.redirect(`${origin}${inviteNext}`)
+      response.cookies.delete('invite_next')
+      return response
     }
 
     // 3. Look up their workspace (two separate queries to avoid join issues)
