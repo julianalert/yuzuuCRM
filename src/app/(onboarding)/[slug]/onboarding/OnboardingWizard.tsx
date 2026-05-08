@@ -495,7 +495,7 @@ function StepMarket({
 
       onStartRedirect()
       store.reset()
-      router.push(`/${slug}/leads`)
+      router.push(`/${slug}/leads?agentRunning=1`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Something went wrong')
     } finally {

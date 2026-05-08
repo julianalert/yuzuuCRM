@@ -153,6 +153,8 @@ export default function ProfilePage() {
     )
   }
 
+  const selectedServices = SERVICES.filter((s) => services.includes(s.id))
+
   async function handleSave() {
     if (!offerDescription.trim()) {
       toast.error('Offer description is required.')
@@ -226,6 +228,51 @@ export default function ProfilePage() {
         </div>
       </div>
 
+      {selectedServices.length > 0 && (
+        <div
+          className="page-enter card"
+          style={{
+            padding: '16px 20px',
+            marginBottom: 12,
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase' as const,
+              color: 'var(--text-3)',
+              fontFamily: 'DM Mono, monospace',
+              marginBottom: 10,
+            }}
+          >
+            Scoring signals activated
+          </div>
+          {selectedServices.map((s) => (
+            <div
+              key={s.id}
+              style={{
+                display: 'flex',
+                gap: 8,
+                fontSize: 13,
+                color: 'var(--text-2)',
+                marginBottom: 6,
+                lineHeight: 1.5,
+              }}
+            >
+              <span style={{ color: 'var(--accent)', flexShrink: 0 }}>→</span>
+              <span>
+                <span style={{ fontWeight: 500, color: 'var(--text-1)' }}>{s.label}:</span>
+                {' '}
+                {s.signal}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Target niches */}
       <div className="card" style={{ padding: 24, marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -278,7 +325,7 @@ export default function ProfilePage() {
             placeholder="Paris, Île de France, France"
           />
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 5 }}>
-            City, area or country — used when scanning for new leads.
+            City, area or country, used when scanning for new leads.
           </div>
         </div>
       </div>

@@ -354,7 +354,7 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
 
   const { data: insertedLeads, error: insertErr } = await supabase
     .from('leads')
-    .upsert(leadRows, { onConflict: 'workspace_id,place_id', ignoreDuplicates: true })
+    .insert(leadRows)
     .select()
 
   if (insertErr) throw insertErr

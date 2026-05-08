@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { Icon, Icons } from '@/components/shared/Icon'
@@ -537,7 +538,27 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('surface_score')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const supabase = createClient()
+  const searchParams = useSearchParams()
   const [agentLastRan, setAgentLastRan] = useState<string | null>(null)
+  const [agentRunning, setAgentRunning] = useState(() => searchParams.get('agentRunning') === '1')
+  const agentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clean the ?agentRunning param from the URL immediately, and set a
+  // safety timeout so the banner never hangs forever if the agent silently fails.
+  useEffect(() => {
+    if (!agentRunning) return
+
+    const url = new URL(window.location.href)
+    url.searchParams.delete('agentRunning')
+    window.history.replaceState({}, '', url.toString())
+
+    // Auto-dismiss after 90s as a safety net
+    agentTimeoutRef.current = setTimeout(() => setAgentRunning(false), 90_000)
+    return () => {
+      if (agentTimeoutRef.current) clearTimeout(agentTimeoutRef.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Load last agent run time for the status bar
   useEffect(() => {
@@ -569,6 +590,14 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
             return [{ ...inserted, lead_searches: null }, ...prev]
           })
           setAgentLastRan(new Date().toISOString())
+          // Dismiss the "agent running" banner and surface a toast on first lead
+          setAgentRunning((wasRunning) => {
+            if (wasRunning) {
+              if (agentTimeoutRef.current) clearTimeout(agentTimeoutRef.current)
+              toast.success('First leads found! More are on the way.')
+            }
+            return false
+          })
         }
       )
       .on(
@@ -676,8 +705,31 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
         </button>
       </div>
 
-      {/* Agent status bar */}
-      {agentLastRan && (
+      {/* Agent running banner — shown right after onboarding while the first search is in-flight */}
+      {agentRunning && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20,
+          padding: '14px 18px', borderRadius: 12,
+          border: '1px solid var(--border)',
+          background: 'var(--bg)',
+        }}>
+          <span className="spinner" style={{
+            flexShrink: 0, width: 18, height: 18,
+            borderColor: 'rgba(0,0,0,0.12)', borderTopColor: 'var(--text-1)',
+          }} />
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>
+              Your agent is scanning Google Maps…
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              Generating your search plan and finding leads tailored to your offer. This takes about 20–30 seconds.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Agent status bar — shown after the agent has already run */}
+      {!agentRunning && agentLastRan && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20,
           fontSize: 12, color: 'var(--text-3)',
@@ -842,8 +894,9 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
           <div style={{ fontSize: 48, marginBottom: 16 }}>📍</div>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>No leads yet</div>
           <div style={{ fontSize: 13.5, color: 'var(--text-3)', marginBottom: 24, maxWidth: 380, lineHeight: 1.6 }}>
-            Your agent is preparing your first search. Leads will appear here automatically once it runs,
-            or you can kick off a manual search right now.
+            {agentRunning
+              ? 'Your agent is scanning Google Maps right now — leads will appear here in a few seconds.'
+              : 'Your agent scans Google Maps daily and surfaces the best leads for your offer. You can also kick off a manual search.'}
           </div>
           <button className="btn btn-primary" onClick={() => setShowSearchModal(true)} style={{ gap: 6 }}>
             <Icon d={Icons.search} size={14} /> New search

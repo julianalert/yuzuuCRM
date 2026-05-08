@@ -7,13 +7,12 @@ import { useWorkspace } from '@/hooks/useWorkspace'
 import { useUser } from '@/hooks/useUser'
 import { Icon, Icons } from '@/components/shared/Icon'
 
-const nav = [
+const platformNav = [
   { id: 'dashboard',  label: 'Dashboard', icon: Icons.dashboard, badge: null,          comingSoon: false },
   { id: 'leads',      label: 'Leads',     icon: Icons.leads,     badge: null,          comingSoon: false },
   { id: 'signals',    label: 'Signals',   icon: Icons.signals,   badge: null,          comingSoon: false },
   { id: 'sequences',  label: 'Sequences', icon: Icons.sequences, badge: null,          comingSoon: true  },
   { id: 'pipeline',   label: 'Pipeline',  icon: Icons.pipeline,  badge: null,          comingSoon: false },
-  { id: 'ask',        label: 'Ask AI',    icon: Icons.ask,       badge: null,          comingSoon: false },
 ]
 
 interface WorkspaceItem {
@@ -129,7 +128,7 @@ export function Sidebar() {
 
       <nav className="sidebar-nav">
         <div className="nav-section-label">Platform</div>
-        {nav.map((n) =>
+        {platformNav.map((n) =>
           n.comingSoon ? (
             <div
               key={n.id}
@@ -171,6 +170,14 @@ export function Sidebar() {
         >
           <Icon d={Icons.user} size={15} />
           Profile
+        </Link>
+        <Link
+          href={`/${slug}/ask`}
+          className={`nav-item ${isActive('ask') ? 'active' : ''}`}
+          style={{ textDecoration: 'none' }}
+        >
+          <Icon d={Icons.ask} size={15} />
+          Ask AI
         </Link>
         <Link
           href={`/${slug}/settings`}
