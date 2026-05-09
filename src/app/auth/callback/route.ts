@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
         accepted_at: new Date().toISOString(),
       }).eq('id', invitation.id)
 
-      return NextResponse.redirect(`${origin}/${ws.slug}/dashboard`)
+      return NextResponse.redirect(`${origin}/${ws.slug}/dashboard?signed_up=invite`)
     }
 
     // New user with no invite — provision with a temp slug
@@ -157,15 +157,17 @@ export async function GET(request: NextRequest) {
       role: 'owner',
     })
 
-    // Fire-and-forget welcome email
+    const appBase =
+      process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? new URL(request.url).origin
+    // Fire-and-forget welcome email (CTA uses public app URL so links never point at localhost in production)
     void sendWelcomeEmail({
       fullName,
       workspaceName: workspace.name,
-      dashboardUrl: `${origin}/${tempSlug}/dashboard`,
+      dashboardUrl: `${appBase}/${tempSlug}/onboarding`,
       toEmail: user.email ?? '',
     })
 
-    return NextResponse.redirect(`${origin}/${tempSlug}/onboarding`)
+    return NextResponse.redirect(`${origin}/${tempSlug}/onboarding?signed_up=oauth`)
   } catch (err) {
     console.error('[auth/callback] Unexpected error:', err)
     return NextResponse.redirect(`${origin}/login?error=unexpected`)

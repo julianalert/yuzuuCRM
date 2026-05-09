@@ -63,6 +63,8 @@ export async function POST(
     .eq('id', user.id)
     .maybeSingle()
 
+  const isNewProfile = !existingUser
+
   if (!existingUser) {
     // Brand-new user — create their profile in the invited workspace
     const fullName = user.user_metadata?.full_name ?? user.email?.split('@')[0] ?? 'User'
@@ -91,5 +93,7 @@ export async function POST(
     .update({ status: 'accepted', accepted_at: new Date().toISOString() })
     .eq('id', invitation.id)
 
-  return NextResponse.json({ redirectTo: `/${ws?.slug ?? workspaceId}/dashboard` })
+  const dashboardPath = `/${ws?.slug ?? workspaceId}/dashboard`
+  const suffix = isNewProfile ? '?signed_up=invite' : ''
+  return NextResponse.json({ redirectTo: `${dashboardPath}${suffix}` })
 }

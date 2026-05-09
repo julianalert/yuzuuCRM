@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { useOnboardingStore } from '@/stores/onboarding-store'
+import { trackOnboardingCompleted } from '@/lib/analytics/mixpanel-events'
 import { Icon, Icons } from '@/components/shared/Icon'
 
 interface Props {
@@ -488,6 +489,13 @@ function StepMarket({
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Failed to save profile')
+
+      trackOnboardingCompleted({
+        workspace_slug: slug,
+        services_count: store.services.length,
+        niches_count: niches.length,
+        has_website_url: Boolean(store.websiteUrl?.trim()),
+      })
 
       // Fire the agent in the background — don't await so navigation is instant.
       // keepalive: true tells the browser to keep this request alive even after

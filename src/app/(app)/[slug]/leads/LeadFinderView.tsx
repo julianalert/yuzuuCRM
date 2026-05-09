@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
+import { trackLeadSearchCompleted, trackLeadViewed } from '@/lib/analytics/mixpanel-events'
 import { Icon, Icons } from '@/components/shared/Icon'
 import type { Workspace, Lead } from '@/lib/types'
 
@@ -65,10 +66,12 @@ function ScoreBadge({ score, enriched }: { score: number | null; enriched?: bool
 
 function SearchModal({
   workspace,
+  slug,
   onClose,
   onResults,
 }: {
   workspace: Workspace
+  slug: string
   onClose: () => void
   onResults: (leads: LeadWithSearch[], trialLimited: boolean) => void
 }) {
@@ -120,6 +123,15 @@ function SearchModal({
       }))
 
       toast.success(`Found ${enriched.length} leads`)
+      trackLeadSearchCompleted({
+        workspace_slug: slug,
+        category: category.trim(),
+        city: city.trim(),
+        country: country.trim(),
+        leads_found: enriched.length,
+        max_results: maxResults,
+        trial_limited: data.trialLimited ?? false,
+      })
       onResults(enriched, data.trialLimited ?? false)
       onClose()
     } catch (err) {
@@ -543,6 +555,15 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
   const [agentRunning, setAgentRunning] = useState(() => searchParams.get('agentRunning') === '1')
   const agentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  useEffect(() => {
+    if (!selectedLead?.id) return
+    trackLeadViewed({
+      workspace_slug: slug,
+      lead_id: selectedLead.id,
+      lead_name: selectedLead.name ?? '',
+    })
+  }, [selectedLead?.id, selectedLead?.name, slug])
+
   // Clean the ?agentRunning param from the URL immediately, and set a
   // safety timeout so the banner never hangs forever if the agent silently fails.
   useEffect(() => {
@@ -910,6 +931,7 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
     {showSearchModal && (
       <SearchModal
         workspace={workspace}
+        slug={slug}
         onClose={() => setShowSearchModal(false)}
         onResults={handleNewResults}
       />

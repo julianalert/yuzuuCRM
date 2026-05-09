@@ -25,7 +25,7 @@ export async function sendWelcomeEmail(params: WelcomeEmailParams): Promise<void
     await resend.emails.send({
       from: FROM,
       to: params.toEmail,
-      subject: 'Welcome to Yuzuu — let\'s build your TAM',
+      subject: 'Welcome to Yuzuu — finish your workspace setup',
       html: welcomeEmailHtml(params),
     })
   } catch (err) {

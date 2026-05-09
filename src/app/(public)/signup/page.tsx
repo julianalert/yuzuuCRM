@@ -2,10 +2,13 @@
 
 import { useState, useTransition } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { trackSignedUp } from '@/lib/analytics/mixpanel-events'
 import { signUp } from '../actions'
 
 export default function SignupPage() {
+  const router = useRouter()
   const [error, setError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
@@ -13,7 +16,14 @@ export default function SignupPage() {
     setError(null)
     startTransition(async () => {
       const result = await signUp(formData)
-      if (result?.error) setError(result.error)
+      if (result?.error) {
+        setError(result.error)
+        return
+      }
+      if (result?.ok) {
+        trackSignedUp({ method: 'email', workspace_slug: result.slug })
+        router.push(`/${result.slug}/dashboard`)
+      }
     })
   }
 

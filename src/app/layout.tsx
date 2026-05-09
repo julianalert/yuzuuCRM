@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import { Toaster } from 'sonner'
 import './globals.css'
+import { SignedUpQueryListener } from '@/components/analytics/SignedUpQueryListener'
 
 export const metadata: Metadata = {
   title: 'Yuzuu',
@@ -25,6 +26,7 @@ mixpanel.init('a57fd33001269c679b909f70bc479996', {
   api_host: 'https://api-eu.mixpanel.com',
 });`}
         </Script>
+        <SignedUpQueryListener />
         {children}
         <Toaster
           position="bottom-right"

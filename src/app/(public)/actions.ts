@@ -88,7 +88,7 @@ export async function signUp(formData: FormData) {
     role: 'owner',
   })
 
-  redirect(`/${slug}/dashboard`)
+  return { ok: true as const, slug }
 }
 
 export async function signIn(formData: FormData) {
