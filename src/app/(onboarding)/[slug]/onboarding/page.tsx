@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { OnboardingWizard } from './OnboardingWizard'
+import { OnboardingWizardEntry } from './OnboardingWizardEntry'
 
 interface Props {
   params: Promise<{ slug: string }>
@@ -32,5 +32,5 @@ export default async function OnboardingPage({ params }: Props) {
     redirect(`/${slug}/leads`)
   }
 
-  return <OnboardingWizard slug={slug} />
+  return <OnboardingWizardEntry slug={slug} />
 }

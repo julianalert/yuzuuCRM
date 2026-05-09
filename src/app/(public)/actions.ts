@@ -13,12 +13,11 @@ function slugify(name: string): string {
 }
 
 export async function signUp(formData: FormData) {
-  const fullName = formData.get('full_name') as string
-  const email = formData.get('email') as string
+  const fullName = (formData.get('full_name') as string)?.trim()
+  const email = (formData.get('email') as string)?.trim()
   const password = formData.get('password') as string
-  const workspaceName = formData.get('workspace_name') as string
 
-  if (!fullName || !email || !password || !workspaceName) {
+  if (!fullName || !email || !password) {
     return { error: 'All fields are required.' }
   }
 
@@ -36,7 +35,11 @@ export async function signUp(formData: FormData) {
 
   const serviceClient = createServiceClient()
 
-  const baseSlug = slugify(workspaceName) || 'workspace'
+  const workspaceName = `${fullName}'s workspace`
+  const baseSlug =
+    slugify(fullName) ||
+    slugify(email.split('@')[0] ?? '') ||
+    `workspace-${Date.now().toString(36)}`
   let slug = baseSlug
   let attempt = 0
   while (attempt < 10) {

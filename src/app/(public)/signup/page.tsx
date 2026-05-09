@@ -74,18 +74,6 @@ export default function SignupPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label" htmlFor="workspace_name">Workspace / Company name</label>
-            <input
-              id="workspace_name"
-              name="workspace_name"
-              type="text"
-              className="form-input"
-              placeholder="Acme Sales"
-              required
-            />
-          </div>
-
-          <div className="form-group">
             <label className="form-label" htmlFor="email">Work email</label>
             <input
               id="email"

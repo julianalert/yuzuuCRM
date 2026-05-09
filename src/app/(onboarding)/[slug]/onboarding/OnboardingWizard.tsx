@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+
 import { toast } from 'sonner'
 import { useOnboardingStore } from '@/stores/onboarding-store'
 import { trackOnboardingCompleted } from '@/lib/analytics/mixpanel-events'
 import { Icon, Icons } from '@/components/shared/Icon'
+import { OnboardingShell } from './onboarding-shell'
 
 interface Props {
   slug: string
@@ -148,12 +150,19 @@ function SelectionPill({
 
 // ── Step 1: Brand Profile (unchanged) ──────────────────────────────────────────
 
-function StepBrand({ slug, onNext }: { slug: string; onNext: () => void }) {
+function StepBrand({
+  slug,
+  onNext,
+  onSlugChange,
+}: {
+  slug: string
+  onNext: () => void
+  onSlugChange: (newSlug: string) => void
+}) {
   const [companyName, setCompanyName] = useState('')
   const [websiteUrl, setWebsiteUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const store = useOnboardingStore()
-  const router = useRouter()
 
   useEffect(() => {
     const s = useOnboardingStore.getState()
@@ -212,8 +221,9 @@ function StepBrand({ slug, onNext }: { slug: string; onNext: () => void }) {
       store.setStep(2)
 
       if (newSlug !== slug) {
-        router.replace(`/${newSlug}/onboarding`)
-        return
+        // Update the address bar silently — no Next.js navigation, no remount.
+        window.history.replaceState({}, '', `/${newSlug}/onboarding`)
+        onSlugChange(newSlug)
       }
 
       onNext()
@@ -284,30 +294,19 @@ function StepBrand({ slug, onNext }: { slug: string; onNext: () => void }) {
 // ── Step 2: What do you sell? ──────────────────────────────────────────────────
 
 function StepServices({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const store = useOnboardingStore()
-  const [services, setServicesLocal] = useState<string[]>([])
-  const [offerDescription, setOfferDescription] = useState('')
-
-  useEffect(() => {
-    const s = useOnboardingStore.getState()
-    setServicesLocal(s.services.length > 0 ? s.services : [])
-    setOfferDescription(s.offerDescription)
-  }, [])
-
-  function toggle(id: string) {
-    setServicesLocal((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    )
-  }
+  const services = useOnboardingStore((s) => s.services)
+  const offerDescription = useOnboardingStore((s) => s.offerDescription)
+  const toggleService = useOnboardingStore((s) => s.toggleService)
+  const setOfferDescription = useOnboardingStore((s) => s.setOfferDescription)
+  const setStep = useOnboardingStore((s) => s.setStep)
 
   function handleNext() {
     if (services.length === 0) {
       toast.error('Select at least one service you offer.')
       return
     }
-    store.setServices(services)
-    store.setOfferDescription(offerDescription.trim())
-    store.setStep(3)
+    setOfferDescription(offerDescription.trim())
+    setStep(3)
     onNext()
   }
 
@@ -346,7 +345,7 @@ function StepServices({ onNext, onBack }: { onNext: () => void; onBack: () => vo
               key={s.id}
               label={s.label}
               selected={services.includes(s.id)}
-              onClick={() => toggle(s.id)}
+              onClick={() => toggleService(s.id)}
             />
           ))}
         </div>
@@ -443,20 +442,15 @@ function StepMarket({
 }) {
   const store = useOnboardingStore()
   const router = useRouter()
-  const [niches, setNichesLocal] = useState<string[]>([])
-  const [location, setLocation] = useState('')
+  const niches = useOnboardingStore((s) => s.niches)
+  const location = useOnboardingStore((s) => s.location)
+  const toggleNicheStore = useOnboardingStore((s) => s.toggleNiche)
+  const setLocationStore = useOnboardingStore((s) => s.setLocation)
+  const setNiches = useOnboardingStore((s) => s.setNiches)
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    const s = useOnboardingStore.getState()
-    setNichesLocal(s.niches.length > 0 ? s.niches : [])
-    setLocation(s.location)
-  }, [])
-
   function toggleNiche(niche: string) {
-    setNichesLocal((prev) =>
-      prev.includes(niche) ? prev.filter((x) => x !== niche) : [...prev, niche]
-    )
+    toggleNicheStore(niche)
   }
 
   const selectedServiceLabels = SERVICES
@@ -471,8 +465,8 @@ function StepMarket({
       return
     }
 
-    store.setNiches(niches)
-    store.setLocation(location.trim())
+    const trimmed = location.trim()
+    store.setLocation(trimmed)
 
     setLoading(true)
     try {
@@ -484,7 +478,7 @@ function StepMarket({
           brand_website_url: store.websiteUrl || null,
           icp_services: store.services,
           icp_niches: niches,
-          icp_city: location.trim(),
+          icp_city: trimmed,
         }),
       })
       const data = await res.json()
@@ -544,7 +538,7 @@ function StepMarket({
             onClick={() => {
               const allNiches = [...NICHES, ...niches.filter((n) => !NICHES.includes(n))]
               const allSelected = allNiches.every((n) => niches.includes(n))
-              setNichesLocal(allSelected ? [] : allNiches)
+              setNiches(allSelected ? [] : allNiches)
             }}
             style={{
               fontSize: 12,
@@ -571,7 +565,7 @@ function StepMarket({
             />
           ))}
           <AddCustomNiche onAdd={(v) => {
-            if (!niches.includes(v)) setNichesLocal((prev) => [...prev, v])
+            if (!niches.includes(v)) setNiches([...niches, v])
           }} />
         </div>
       </div>
@@ -583,7 +577,7 @@ function StepMarket({
           <input
             className="form-input"
             value={location}
-            onChange={(e) => setLocation(e.target.value)}
+            onChange={(e) => setLocationStore(e.target.value)}
             placeholder="Paris, Île de France, France…"
             onKeyDown={(e) => e.key === 'Enter' && !loading && canAdvance && handleSave()}
           />
@@ -649,6 +643,9 @@ function StepMarket({
 export function OnboardingWizard({ slug }: Props) {
   const { step, setStep } = useOnboardingStore()
   const [redirecting, setRedirecting] = useState(false)
+  // Track the slug that may have been silently updated in step 1 (workspace rename).
+  // Using a ref avoids a re-render; the value is only needed at step 3's final redirect.
+  const effectiveSlugRef = useRef(slug)
 
   const STEPS = [
     { n: 1, label: 'Workspace' },
@@ -658,18 +655,20 @@ export function OnboardingWizard({ slug }: Props) {
 
   if (redirecting) {
     return (
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        minHeight: '60vh', gap: 12, color: 'var(--text-3)', fontSize: 15,
-      }}>
-        <span className="spinner" style={{ borderColor: 'rgba(0,0,0,0.12)', borderTopColor: 'var(--accent)' }} />
-        Building your lead list…
-      </div>
+      <OnboardingShell>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          minHeight: 320, gap: 12, color: 'var(--text-3)', fontSize: 15,
+        }}>
+          <span className="spinner" style={{ borderColor: 'rgba(0,0,0,0.12)', borderTopColor: 'var(--accent)' }} />
+          Building your lead list…
+        </div>
+      </OnboardingShell>
     )
   }
 
   return (
-    <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
+    <OnboardingShell>
       {/* Step indicator */}
       <div style={{
         display: 'flex',
@@ -677,7 +676,6 @@ export function OnboardingWizard({ slug }: Props) {
         justifyContent: 'center',
         gap: 0,
         marginBottom: 8,
-        paddingTop: 32,
         flexWrap: 'wrap' as const,
       }}>
         {STEPS.map((s, i) => (
@@ -724,6 +722,7 @@ export function OnboardingWizard({ slug }: Props) {
         <StepBrand
           slug={slug}
           onNext={() => setStep(2)}
+          onSlugChange={(s) => { effectiveSlugRef.current = s }}
         />
       )}
 
@@ -736,7 +735,7 @@ export function OnboardingWizard({ slug }: Props) {
 
       {step === 3 && (
         <StepMarket
-          slug={slug}
+          slug={effectiveSlugRef.current}
           onBack={() => setStep(2)}
           onStartRedirect={() => setRedirecting(true)}
         />
@@ -757,7 +756,7 @@ export function OnboardingWizard({ slug }: Props) {
           transition: 'width 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
         }} />
       </div>
-    </div>
+    </OnboardingShell>
   )
 }
 
