@@ -161,6 +161,7 @@ async function scrapeWebsite(url: string) {
 // ── Main agent function ───────────────────────────────────────────────────────
 
 export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRunResult> {
+  console.log(`[agent] START workspaceId=${workspaceId}`)
   const supabase = createServiceClient()
 
   // 1. Load workspace
@@ -171,8 +172,10 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
     .single()
 
   if (wsErr || !workspace) {
+    console.error('[agent] FAIL step=load-workspace', wsErr)
     throw new Error(`Workspace ${workspaceId} not found`)
   }
+  console.log(`[agent] workspace loaded plan=${workspace.plan} offer=${!!workspace.offer_description} niches=${JSON.stringify(workspace.icp_niches)} city=${workspace.icp_city}`)
 
   if (!workspace.offer_description) {
     return { skipped: true, skipReason: 'No offer description — onboarding not complete', leadsFound: 0, leadsEnriched: 0 }
@@ -195,15 +198,21 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
   const cachedHash = workspace.agent_profile_hash as string | null
 
   if (!cachedPlan || cachedHash !== profileHash) {
-    console.log(`[agent] Regenerating search plan for workspace ${workspaceId}`)
-    plan = await defineSearchPlan({
-      icp_niches: niches,
-      icp_city: city,
-      icp_services: workspace.icp_services,
-      offer_description: workspace.offer_description,
-    })
+    console.log(`[agent] Regenerating search plan — OPENAI_API_KEY set=${!!process.env.OPENAI_API_KEY}`)
+    try {
+      plan = await defineSearchPlan({
+        icp_niches: niches,
+        icp_city: city,
+        icp_services: workspace.icp_services,
+        offer_description: workspace.offer_description,
+      })
+      console.log(`[agent] Search plan generated searches=${plan.searches.length} reasoning=${plan.reasoning}`)
+    } catch (planErr) {
+      console.error('[agent] FAIL step=define-search-plan', planErr)
+      throw planErr
+    }
 
-    await supabase
+    const { error: updateErr } = await supabase
       .from('workspaces')
       .update({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -211,8 +220,10 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
         agent_profile_hash: profileHash,
       })
       .eq('id', workspaceId)
+    if (updateErr) console.warn('[agent] Could not cache search plan (migration may be pending):', updateErr.message)
   } else {
     plan = cachedPlan
+    console.log(`[agent] Using cached search plan searches=${plan.searches.length}`)
   }
 
   if (!plan.searches || plan.searches.length === 0) {
@@ -220,19 +231,21 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
   }
 
   // 4. Pick today's search by rotating through the plan
-  const { count: runCount } = await supabase
+  const { count: runCount, error: countErr } = await supabase
     .from('agent_runs')
     .select('*', { count: 'exact', head: true })
     .eq('workspace_id', workspaceId)
+  if (countErr) console.warn('[agent] agent_runs count failed (table may be missing):', countErr.message)
 
   const index = (runCount ?? 0) % plan.searches.length
   const { query, location } = plan.searches[index]
+  console.log(`[agent] Selected search index=${index} query="${query}" location="${location}"`)
 
   // 5. Check 24h fingerprint cooldown
   const fingerprint = computeFingerprint(query, location)
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
-  const { data: recentRun } = await supabase
+  const { data: recentRun, error: recentErr } = await supabase
     .from('agent_runs')
     .select('id, ran_at')
     .eq('workspace_id', workspaceId)
@@ -240,6 +253,7 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
     .gte('ran_at', since24h)
     .limit(1)
     .maybeSingle()
+  if (recentErr) console.warn('[agent] agent_runs fingerprint check failed:', recentErr.message)
 
   if (recentRun) {
     return {
@@ -254,6 +268,7 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
 
   // 6. Call Apify
   const apifyToken = process.env.APIFY_API_TOKEN
+  console.log(`[agent] APIFY_API_TOKEN set=${!!apifyToken}`)
   if (!apifyToken) throw new Error('APIFY_API_TOKEN is not configured')
 
   const limits = getPlanLimits(workspace.plan)
@@ -352,12 +367,37 @@ export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRu
     discovered_at: now,
   }))
 
+  console.log(`[agent] Inserting ${leadRows.length} leads (discovered_at field included)`)
   const { data: insertedLeads, error: insertErr } = await supabase
     .from('leads')
     .insert(leadRows)
     .select()
 
-  if (insertErr) throw insertErr
+  if (insertErr) {
+    console.error('[agent] FAIL step=insert-leads code=' + insertErr.code, insertErr.message)
+    // If discovered_at column is missing (migration 008 not applied), retry without it
+    if (insertErr.code === '42703' && insertErr.message.includes('discovered_at')) {
+      console.warn('[agent] discovered_at column missing — retrying without it (apply migration 008 to fix)')
+      const rowsWithoutDiscoveredAt = leadRows.map(({ discovered_at: _d, ...rest }) => rest)
+      const { data: retryLeads, error: retryErr } = await supabase
+        .from('leads')
+        .insert(rowsWithoutDiscoveredAt)
+        .select()
+      if (retryErr) {
+        console.error('[agent] FAIL step=insert-leads-retry', retryErr)
+        throw retryErr
+      }
+      console.log(`[agent] Retry insert succeeded leadsInserted=${retryLeads?.length}`)
+      // Continue with retried leads (no discovered_at, "New" badge won't show)
+      const savedLeadsRetry = retryLeads ?? []
+      await supabase.from('agent_runs').insert({
+        workspace_id: workspaceId, search_query: query, location_query: location,
+        fingerprint, leads_found: savedLeadsRetry.length, leads_enriched: 0, status: 'done',
+      })
+      return { skipped: false, leadsFound: savedLeadsRetry.length, leadsEnriched: 0, searchQuery: query, locationQuery: location }
+    }
+    throw insertErr
+  }
 
   const savedLeads = insertedLeads ?? []
   let enrichedCount = 0
