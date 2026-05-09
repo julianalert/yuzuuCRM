@@ -41,8 +41,8 @@ export function welcomeEmailHtml(params: WelcomeEmailParams): string {
       </table>
     </div>
     <div style="padding:40px 36px 44px;">
-      <h1 style="font-size:22px;font-weight:700;color:#1A1916;margin:0 0 10px;line-height:1.25;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Welcome to Yuzuu, ${fullName}!</h1>
-      <p style="font-size:14px;color:#6B6860;margin:0 0 28px;line-height:1.55;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"><strong style="color:#1A1916;">${workspaceName}</strong> is ready. Finish the quick setup so we can score leads for your offer and build your list:</p>
+      <h1 style="font-size:22px;font-weight:700;color:#1A1916;margin:0 0 10px;line-height:1.25;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Your first leads are waiting for you</h1>
+      <p style="font-size:14px;color:#6B6860;margin:0 0 28px;line-height:1.55;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Welcome to Yuzuu, ${fullName}. <strong style="color:#1A1916;">${workspaceName}</strong> is ready — finish the quick setup below, then open your leads to see AI-scored prospects matched to your offer.</p>
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 28px;">
         <tbody>
           ${stepRow(
@@ -66,7 +66,7 @@ export function welcomeEmailHtml(params: WelcomeEmailParams): string {
         </tbody>
       </table>
       <a href="${dashboardUrl}" style="display:inline-block;background:#1A1916;color:white;padding:13px 26px;border-radius:8px;text-decoration:none;font-weight:500;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-        Continue setup →
+        View your leads →
       </a>
     </div>
     <div style="padding:24px 36px 32px;border-top:1px solid #E8E6E1;font-size:12px;color:#A8A49C;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">

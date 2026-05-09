@@ -163,7 +163,7 @@ export async function GET(request: NextRequest) {
     void sendWelcomeEmail({
       fullName,
       workspaceName: workspace.name,
-      dashboardUrl: `${appBase}/${tempSlug}/onboarding`,
+      dashboardUrl: `${appBase}/${tempSlug}/leads`,
       toEmail: user.email ?? '',
     })
 

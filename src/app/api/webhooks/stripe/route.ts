@@ -25,41 +25,65 @@ export async function POST(req: Request) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session
         const workspaceId = session.metadata?.workspace_id
-        if (!workspaceId) break
+        if (!workspaceId) {
+          console.error('[Stripe Webhook] checkout.session.completed missing workspace_id metadata', { sessionId: session.id })
+          break
+        }
 
         const subscription = session.subscription
           ? await getStripe().subscriptions.retrieve(session.subscription as string)
           : null
 
+        // Prefer plan from metadata (set at checkout time); fall back to price ID lookup
+        const metaPlan = session.metadata?.plan
         const priceId = subscription?.items.data[0]?.price.id
-        const plan = priceId ? getPlanFromPriceId(priceId) : 'starter'
+        const plan = metaPlan || (priceId ? getPlanFromPriceId(priceId) : 'starter')
 
-        await supabase.from('workspaces').update({
+        console.log('[Stripe Webhook] checkout.session.completed', { workspaceId, plan, priceId, metaPlan })
+
+        const { error } = await supabase.from('workspaces').update({
           stripe_customer_id: session.customer as string,
           stripe_subscription_id: session.subscription as string,
           plan,
           subscription_status: subscription?.status === 'trialing' ? 'trialing' : 'active',
         }).eq('id', workspaceId)
+
+        if (error) {
+          console.error('[Stripe Webhook] Failed to update workspace after checkout', { workspaceId, plan, error })
+          return NextResponse.json({ error: 'DB update failed' }, { status: 500 })
+        }
         break
       }
 
       case 'customer.subscription.updated': {
         const sub = event.data.object as Stripe.Subscription
         const workspaceId = sub.metadata?.workspace_id
-        if (!workspaceId) break
+        if (!workspaceId) {
+          console.error('[Stripe Webhook] customer.subscription.updated missing workspace_id metadata', { subId: sub.id })
+          break
+        }
 
+        // Prefer plan from metadata; fall back to price ID lookup
+        const metaPlan = sub.metadata?.plan
         const priceId = sub.items.data[0]?.price.id
-        const plan = priceId ? getPlanFromPriceId(priceId) : 'starter'
+        const plan = metaPlan || (priceId ? getPlanFromPriceId(priceId) : 'starter')
 
         let status: 'active' | 'trialing' | 'past_due' | 'canceled' = 'active'
         if (sub.status === 'trialing') status = 'trialing'
         else if (sub.status === 'past_due') status = 'past_due'
         else if (sub.status === 'canceled') status = 'canceled'
 
-        await supabase.from('workspaces').update({
+        console.log('[Stripe Webhook] customer.subscription.updated', { workspaceId, plan, status, priceId, metaPlan })
+
+        const { error } = await supabase.from('workspaces').update({
           plan,
           subscription_status: status,
         }).eq('id', workspaceId)
+
+        if (error) {
+          console.error('[Stripe Webhook] Failed to update workspace subscription', { workspaceId, plan, error })
+          return NextResponse.json({ error: 'DB update failed' }, { status: 500 })
+        }
         break
       }
 

@@ -90,6 +90,7 @@ export default function BillingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           price_id: priceId,
+          plan: planKey,
           success_url: `${window.location.origin}${window.location.pathname}?checkout=success`,
           cancel_url: window.location.href,
         }),
