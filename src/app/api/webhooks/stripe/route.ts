@@ -18,6 +18,7 @@ export async function POST(req: Request) {
   }
 
   const supabase = createServiceClient()
+  const appBase = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? ''
 
   try {
     switch (event.type) {
@@ -89,7 +90,7 @@ export async function POST(req: Request) {
         if (owner && workspace) {
           await sendPaymentFailedEmail({
             fullName: owner.full_name,
-            billingPortalUrl: `${process.env.NEXT_PUBLIC_APP_URL}/${workspace.slug}/settings/billing`,
+            billingPortalUrl: `${appBase}/${workspace.slug}/settings/billing`,
             toEmail: owner.email,
           })
         }
@@ -122,7 +123,7 @@ export async function POST(req: Request) {
         if (owner) {
           await sendPaymentFailedEmail({
             fullName: owner.full_name,
-            billingPortalUrl: `${process.env.NEXT_PUBLIC_APP_URL}/${workspace.slug}/settings/billing`,
+            billingPortalUrl: `${appBase}/${workspace.slug}/settings/billing`,
             toEmail: owner.email,
           })
         }

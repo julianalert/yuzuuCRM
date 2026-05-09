@@ -34,11 +34,15 @@ export async function sendWelcomeEmail(params: WelcomeEmailParams): Promise<void
 }
 
 export async function sendTrialEndingEmail(params: TrialEndingEmailParams): Promise<void> {
+  const subject =
+    params.daysRemaining === 1
+      ? 'Your Yuzuu trial ends tomorrow'
+      : `Your Yuzuu trial ends in ${params.daysRemaining} days`
   try {
     await resend.emails.send({
       from: FROM,
       to: params.toEmail,
-      subject: 'Your Yuzuu trial ends in 3 days',
+      subject,
       html: trialEndingEmailHtml(params),
     })
   } catch (err) {
@@ -51,7 +55,7 @@ export async function sendPaymentFailedEmail(params: PaymentFailedEmailParams): 
     await resend.emails.send({
       from: FROM,
       to: params.toEmail,
-      subject: 'Action required: Payment failed for Yuzuu',
+      subject: 'Action required: update your Yuzuu billing',
       html: paymentFailedEmailHtml(params),
     })
   } catch (err) {
