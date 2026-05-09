@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getStripe } from '@/lib/stripe/client'
 import { createServiceClient } from '@/lib/supabase/server'
-import { getPlanFromPriceId } from '@/lib/stripe/plans'
+import { getPlanFromPriceId, type PlanName } from '@/lib/stripe/plans'
 import { sendPaymentFailedEmail } from '@/lib/email/send'
 import type Stripe from 'stripe'
 
@@ -35,7 +35,7 @@ export async function POST(req: Request) {
           : null
 
         // Prefer plan from metadata (set at checkout time); fall back to price ID lookup
-        const metaPlan = session.metadata?.plan
+        const metaPlan = session.metadata?.plan as PlanName | undefined
         const priceId = subscription?.items.data[0]?.price.id
         const plan = metaPlan || (priceId ? getPlanFromPriceId(priceId) : 'starter')
 
@@ -64,7 +64,7 @@ export async function POST(req: Request) {
         }
 
         // Prefer plan from metadata; fall back to price ID lookup
-        const metaPlan = sub.metadata?.plan
+        const metaPlan = sub.metadata?.plan as PlanName | undefined
         const priceId = sub.items.data[0]?.price.id
         const plan = metaPlan || (priceId ? getPlanFromPriceId(priceId) : 'starter')
 
