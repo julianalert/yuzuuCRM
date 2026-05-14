@@ -1,6 +1,5 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
-import { sendWelcomeEmail } from '@/lib/email/send'
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
@@ -113,7 +112,7 @@ export async function GET(request: NextRequest) {
     const tempSlug = `workspace-${Date.now().toString(36)}`
 
     const trialEndsAt = new Date()
-    trialEndsAt.setDate(trialEndsAt.getDate() + 14)
+    trialEndsAt.setDate(trialEndsAt.getDate() + 3)
 
     const { data: workspace, error: wsInsertError } = await serviceClient
       .from('workspaces')
@@ -157,15 +156,6 @@ export async function GET(request: NextRequest) {
       role: 'owner',
     })
 
-    const appBase =
-      process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? new URL(request.url).origin
-    // Fire-and-forget welcome email (CTA uses public app URL so links never point at localhost in production)
-    void sendWelcomeEmail({
-      fullName,
-      workspaceName: workspace.name,
-      dashboardUrl: `${appBase}/${tempSlug}/leads`,
-      toEmail: user.email ?? '',
-    })
 
     return NextResponse.redirect(`${origin}/${tempSlug}/onboarding?signed_up=oauth`)
   } catch (err) {

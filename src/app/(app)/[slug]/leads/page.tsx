@@ -31,7 +31,9 @@ export default async function LeadsPage({ params }: Props) {
   const workspace = workspaceRaw as Workspace | null
   if (!workspace) redirect('/login')
 
-  // Load all leads with their parent search context
+  // Load all leads with their parent search context. We don't filter
+  // by relevance / archived here — the tab UI does that client-side
+  // so we never need to re-hit the DB to switch tabs.
   const { data: initialLeads } = await supabase
     .from('leads')
     .select(`
@@ -40,12 +42,28 @@ export default async function LeadsPage({ params }: Props) {
     `)
     .eq('workspace_id', workspace.id)
     .order('created_at', { ascending: false })
-    .limit(200)
+    .limit(500)
+
+  const leadIds = (initialLeads ?? []).map((l) => l.id)
+  const { data: signals } = leadIds.length > 0
+    ? await supabase
+        .from('lead_signals')
+        .select('lead_id, type, severity')
+        .in('lead_id', leadIds)
+        .order('severity', { ascending: false })
+    : { data: [] }
+
+  const signalsByLead: Record<string, Array<{ type: string; severity: number }>> = {}
+  for (const s of signals ?? []) {
+    if (!signalsByLead[s.lead_id]) signalsByLead[s.lead_id] = []
+    signalsByLead[s.lead_id].push({ type: s.type, severity: s.severity })
+  }
 
   return (
     <LeadFinderView
       workspace={workspace}
       initialLeads={initialLeads ?? []}
+      initialSignalsByLead={signalsByLead}
       slug={slug}
     />
   )

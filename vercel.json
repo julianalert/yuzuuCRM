@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron/daily-agent",
-      "schedule": "0 7 * * *"
+      "path": "/api/cron/tick",
+      "schedule": "*/30 * * * *"
     }
   ]
 }

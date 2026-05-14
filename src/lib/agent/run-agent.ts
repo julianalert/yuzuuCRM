@@ -1,512 +1,794 @@
 /**
  * run-agent.ts
  *
- * Core autonomous lead-finding agent.
- * Runs once per workspace per day (enforced via fingerprint + 24h cooldown).
+ * The intent engine's per-workspace runner. The cron tick claims a workspace
+ * (atomic, see `claim_next_workspaces` in migration 010) and then calls
+ * `runSliceForWorkspace(workspaceId)`.
  *
- * Flow:
- * 1. Load workspace ICP profile
- * 2. Reuse or regenerate the GPT-4o mini search plan when profile changes
- * 3. Pick today's search entry from the plan (rotating through the list)
- * 4. Check 24h cooldown via fingerprint
- * 5. Call Apify (Google Maps scraper)
- * 6. Dedup by place_id — skip any business already stored for this workspace
- * 7. Insert new leads
- * 8. Auto-enrich leads with surface_score ≥ 60 (Claude opportunity scoring)
- * 9. Record the agent_run
+ * One slice = one Apify run (either discovery or refresh). A slice:
+ *  1. Validates lifecycle (subscription / trial expiry).
+ *  2. Resets monthly Apify budget if calendar month rolled over.
+ *  3. Picks discovery vs refresh mode.
+ *  4. Atomically claims a cell (or refresh batch), runs Apify with proper
+ *     customGeolocation / startUrls input, persists results.
+ *  5. Runs intent detectors → relevance router.
+ *  6. Enriches `hot` leads with gpt-4o-mini (was Opus).
+ *  7. Marks cell status (exhausted / partial / needs_split / error).
+ *  8. Schedules workspace's next_run_at based on plan (with trial burst).
+ *
+ * All Apify work is wrapped in per-cell try/catch — one failure cannot
+ * kill the workspace's tick.
  */
 
-import crypto from 'crypto'
-import Anthropic from '@anthropic-ai/sdk'
 import { ApifyClient } from 'apify-client'
 import { createServiceClient } from '@/lib/supabase/server'
-import { defineSearchPlan, type SearchPlan } from './define-search'
-import { getPlanLimits } from '@/lib/plans'
+import {
+  APIFY_CENTS_PER_PLACE_DISCOVERY,
+  APIFY_CENTS_PER_PLACE_REFRESH,
+  currentMonthKey,
+  getPlanLimits,
+} from '@/lib/plans'
+import { planInitialCells, persistCells } from './cell-planner'
+import {
+  type ApifyPlace,
+  computeProfileHash,
+  placeHasBookingFromMaps,
+  placeToLeadRow,
+  scrapeWebsite,
+} from './lead-utils'
+import { detectAllSignals } from './signal-detectors'
+import { computeRelevance } from './relevance'
+import { enrichLead } from './enrich'
+import { timezoneForCountry } from './geo-data/top-cities'
+import type { Database, Json } from '@/lib/types/database'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+type Workspace = Database['public']['Tables']['workspaces']['Row']
+type MarketCell = Database['public']['Tables']['market_cells']['Row']
 
-interface ApifyPlace {
-  title?: string
-  categoryName?: string
-  address?: string
-  phone?: string
-  website?: string
-  totalScore?: number
-  reviewsCount?: number
-  url?: string
-  placeId?: string
-  bookingLinks?: unknown[]
-  reserveTableUrl?: string | null
-  orderBy?: unknown[]
-}
+// ── Public surface ───────────────────────────────────────────────────────────
 
-interface SocialLinks {
-  [key: string]: string | undefined
-}
-
-export interface AgentRunResult {
+export interface SliceResult {
   skipped: boolean
   skipReason?: string
+  mode?: 'discovery' | 'refresh'
+  cellsScanned: number
   leadsFound: number
   leadsEnriched: number
-  searchQuery?: string
-  locationQuery?: string
+  hotLeadsCreated: number
+  apifySpendCents: number
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function computeFingerprint(query: string, location: string): string {
-  return crypto
-    .createHash('md5')
-    .update(`${query.toLowerCase().trim()}::${location.toLowerCase().trim()}`)
-    .digest('hex')
+export interface RunOptions {
+  /** Force a mode. Default: pick automatically (refresh 30%, discovery 70%). */
+  mode?: 'discovery' | 'refresh'
+  /** Internal: how many cells we've already processed inside the same tick
+   *  (used by trial-burst to avoid infinite loops). */
+  burstIteration?: number
 }
 
-function computeProfileHash(niches: string[], city: string, offer: string): string {
-  return crypto
-    .createHash('md5')
-    .update(JSON.stringify({ niches: [...niches].sort(), city: city.toLowerCase().trim(), offer }))
-    .digest('hex')
-}
+const APIFY_GMAPS_ACTOR = 'nwua9Gu5YrADL7ZDj' // compass/crawler-google-places
 
-function computeSurfaceScore(place: ApifyPlace): number {
-  let score = 50
-  if (!place.website) score += 20
-  const reviews = place.reviewsCount ?? 0
-  if (reviews < 10) score += 15
-  else if (reviews < 30) score += 8
-  const rating = place.totalScore ?? 5
-  if (rating < 3.5) score += 15
-  else if (rating < 4.0) score += 8
-  return Math.min(score, 100)
-}
+// Discovery: keep at 5 reviews to minimise add-on cost; refresh fetches more.
+const REVIEWS_PER_DISCOVERY = 5
+const REVIEWS_PER_REFRESH = 20
 
-async function scrapeWebsite(url: string) {
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Yuzuu/1.0)' },
-      signal: AbortSignal.timeout(8000),
-    })
-    const html = await res.text()
+// Cell exhaustion thresholds
+const DEDUP_RATIO_EXHAUSTED = 0.7  // 2 runs in a row above this → exhausted
+const SPLIT_HARD_CAP = 120         // Google's per-area cap; hit it → needs_split
 
-    const socialLinks: SocialLinks = {}
-    const socialPatterns: [string, RegExp][] = [
-      ['instagram', /https?:\/\/(?:www\.)?instagram\.com\/[^\s"'<>]+/i],
-      ['facebook', /https?:\/\/(?:www\.)?facebook\.com\/[^\s"'<>]+/i],
-      ['linkedin', /https?:\/\/(?:www\.)?linkedin\.com\/[^\s"'<>]+/i],
-      ['twitter', /https?:\/\/(?:www\.)?(?:twitter|x)\.com\/[^\s"'<>]+/i],
-      ['youtube', /https?:\/\/(?:www\.)?youtube\.com\/[^\s"'<>]+/i],
-      ['tiktok', /https?:\/\/(?:www\.)?tiktok\.com\/[^\s"'<>]+/i],
-    ]
-    for (const [key, pattern] of socialPatterns) {
-      const match = html.match(pattern)
-      if (match) socialLinks[key] = match[0]
-    }
+// ── Lifecycle / budget gates ─────────────────────────────────────────────────
 
-    const bookingKeywords = /book|reserv|rendez-vous|appointment|agenda|calendar|schedule|réserver/i
-    const hasBooking = bookingKeywords.test(html)
-
-    const scriptTags = html.match(/<script[^>]+src=["'][^"']+["']/g) ?? []
-    const techMap: Record<string, string> = {
-      'wordpress': 'WordPress', 'wp-content': 'WordPress',
-      'wix.com': 'Wix', 'shopify': 'Shopify',
-      'squarespace': 'Squarespace', 'webflow': 'Webflow',
-      'framer': 'Framer', 'react': 'React', 'next': 'Next.js',
-      'analytics.js': 'Google Analytics', 'gtag': 'Google Analytics',
-      'pixel': 'Facebook Pixel',
-    }
-    const techHints = Array.from(
-      new Set(
-        scriptTags.flatMap((tag) =>
-          Object.entries(techMap)
-            .filter(([key]) => tag.toLowerCase().includes(key))
-            .map(([, label]) => label)
-        )
-      )
-    )
-
-    let qualityScore = 50
-    if (html.includes('<meta property="og:')) qualityScore += 10
-    if (html.includes('schema.org')) qualityScore += 5
-    if (techHints.length > 0) qualityScore += 5
-    if (Object.keys(socialLinks).length > 0) qualityScore += 10
-    if (hasBooking) qualityScore += 10
-    if (html.includes('ssl') || res.url.startsWith('https')) qualityScore += 5
-    if (html.length > 30000) qualityScore += 5
-
-    const bodyExcerpt = html
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 800)
-
-    return {
-      qualityScore: Math.min(qualityScore, 100),
-      hasSocialPresence: Object.keys(socialLinks).length > 0,
-      socialLinks,
-      hasBooking,
-      techHints,
-      bodyExcerpt,
-    }
-  } catch {
-    return {
-      qualityScore: 10, hasSocialPresence: false, socialLinks: {},
-      hasBooking: false, techHints: [], bodyExcerpt: '',
-    }
+function lifecycleSkipReason(workspace: Workspace): string | null {
+  if (workspace.subscription_status === 'canceled') return 'subscription canceled'
+  if (workspace.subscription_status === 'past_due') return 'subscription past_due'
+  if (workspace.subscription_status === 'trialing' &&
+      workspace.trial_ends_at &&
+      new Date(workspace.trial_ends_at).getTime() < Date.now()) {
+    return 'trial expired'
   }
+  if (workspace.tam_status === 'expired') return 'tam status expired'
+  return null
 }
 
-// ── Main agent function ───────────────────────────────────────────────────────
-
-export async function runAgentForWorkspace(workspaceId: string): Promise<AgentRunResult> {
-  console.log(`[agent] START workspaceId=${workspaceId}`)
+async function maybeResetMonthlyBudget(workspaceId: string, workspace: Workspace) {
   const supabase = createServiceClient()
-
-  // 1. Load workspace
-  const { data: workspace, error: wsErr } = await supabase
-    .from('workspaces')
-    .select('*')
-    .eq('id', workspaceId)
-    .single()
-
-  if (wsErr || !workspace) {
-    console.error('[agent] FAIL step=load-workspace', wsErr)
-    throw new Error(`Workspace ${workspaceId} not found`)
-  }
-  console.log(`[agent] workspace loaded plan=${workspace.plan} offer=${!!workspace.offer_description} niches=${JSON.stringify(workspace.icp_niches)} city=${workspace.icp_city}`)
-
-  if (!workspace.offer_description) {
-    return { skipped: true, skipReason: 'No offer description — onboarding not complete', leadsFound: 0, leadsEnriched: 0 }
-  }
-
-  const niches = workspace.icp_niches ?? []
-  const city = workspace.icp_city ?? ''
-
-  if (niches.length === 0 || !city) {
-    return { skipped: true, skipReason: 'Missing ICP niches or city', leadsFound: 0, leadsEnriched: 0 }
-  }
-
-  // 2. Compute profile hash to detect ICP changes
-  const profileHash = computeProfileHash(niches, city, workspace.offer_description)
-
-  // 3. Get or regenerate search plan
-  let plan: SearchPlan
-
-  const cachedPlan = workspace.agent_search_plan as SearchPlan | null
-  const cachedHash = workspace.agent_profile_hash as string | null
-
-  if (!cachedPlan || cachedHash !== profileHash) {
-    console.log(`[agent] Regenerating search plan — OPENAI_API_KEY set=${!!process.env.OPENAI_API_KEY}`)
-    try {
-      plan = await defineSearchPlan({
-        icp_niches: niches,
-        icp_city: city,
-        icp_services: workspace.icp_services,
-        offer_description: workspace.offer_description,
-      })
-      console.log(`[agent] Search plan generated searches=${plan.searches.length} reasoning=${plan.reasoning}`)
-    } catch (planErr) {
-      console.error('[agent] FAIL step=define-search-plan', planErr)
-      throw planErr
-    }
-
-    const { error: updateErr } = await supabase
+  const key = currentMonthKey()
+  if (workspace.apify_spend_month_key !== key) {
+    await supabase
       .from('workspaces')
       .update({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        agent_search_plan: plan as any,
-        agent_profile_hash: profileHash,
+        apify_spend_cents_month: 0,
+        apify_spend_month_key: key,
       })
       .eq('id', workspaceId)
-    if (updateErr) console.warn('[agent] Could not cache search plan (migration may be pending):', updateErr.message)
-  } else {
-    plan = cachedPlan
-    console.log(`[agent] Using cached search plan searches=${plan.searches.length}`)
+    workspace.apify_spend_cents_month = 0
+    workspace.apify_spend_month_key = key
   }
+}
 
-  if (!plan.searches || plan.searches.length === 0) {
-    return { skipped: true, skipReason: 'Search plan is empty', leadsFound: 0, leadsEnriched: 0 }
-  }
+function isInTrialBurst(workspace: Workspace): boolean {
+  if (workspace.plan !== 'free' && workspace.subscription_status !== 'trialing') return false
+  const limits = getPlanLimits(workspace.plan)
+  if (limits.trialBurstHours <= 0) return false
+  const start = workspace.onboarding_completed_at
+  if (!start) return false
+  const ageHours = (Date.now() - new Date(start).getTime()) / 3_600_000
+  return ageHours <= limits.trialBurstHours
+}
 
-  // 4. Pick today's search by rotating through the plan
-  const { count: runCount, error: countErr } = await supabase
-    .from('agent_runs')
+// ── Cell seeding (fired on first run if no cells exist) ──────────────────────
+
+async function ensureCellsSeeded(workspace: Workspace): Promise<number> {
+  const supabase = createServiceClient()
+  const { count } = await supabase
+    .from('market_cells')
     .select('*', { count: 'exact', head: true })
-    .eq('workspace_id', workspaceId)
-  if (countErr) console.warn('[agent] agent_runs count failed (table may be missing):', countErr.message)
+    .eq('workspace_id', workspace.id)
+  if ((count ?? 0) > 0) return count!
 
-  const index = (runCount ?? 0) % plan.searches.length
-  const { query, location } = plan.searches[index]
-  console.log(`[agent] Selected search index=${index} query="${query}" location="${location}"`)
+  console.log(`[agent] No cells for workspace ${workspace.id} — seeding from cell-planner`)
+  const plan = await planInitialCells({
+    icpCity:         workspace.icp_city,
+    icpNiches:       workspace.icp_niches,
+    icpServices:     workspace.icp_services,
+    offerDescription: workspace.offer_description,
+  })
+  console.log(`[agent] ${plan.reasoning}`)
+  const inserted = await persistCells(workspace.id, plan.cells)
 
-  // 5. Check 24h fingerprint cooldown
-  const fingerprint = computeFingerprint(query, location)
-  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  // Cache the (still-useful) profile hash and inferred timezone on the
+  // workspace so subsequent ICP changes can be detected.
+  const profileHash = computeProfileHash(
+    workspace.icp_niches ?? [],
+    workspace.icp_city ?? '',
+    workspace.offer_description ?? '',
+  )
+  const tz = plan.geocode?.timezone ?? timezoneForCountry(plan.geocode?.country_code)
+  await supabase
+    .from('workspaces')
+    .update({
+      agent_profile_hash: profileHash,
+      timezone: tz,
+    })
+    .eq('id', workspace.id)
 
-  const { data: recentRun, error: recentErr } = await supabase
-    .from('agent_runs')
-    .select('id, ran_at')
-    .eq('workspace_id', workspaceId)
-    .eq('fingerprint', fingerprint)
-    .gte('ran_at', since24h)
-    .limit(1)
-    .maybeSingle()
-  if (recentErr) console.warn('[agent] agent_runs fingerprint check failed:', recentErr.message)
+  return inserted
+}
 
-  if (recentRun) {
+// ── Atomic claim wrappers ────────────────────────────────────────────────────
+
+async function claimNextCell(workspaceId: string): Promise<MarketCell | null> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase.rpc('claim_next_cell', { p_workspace_id: workspaceId })
+  if (error) {
+    console.warn('[agent] claim_next_cell rpc failed:', error.message)
+    return null
+  }
+  const rows = data as unknown as MarketCell[] | null
+  return rows && rows.length > 0 ? rows[0] : null
+}
+
+async function releaseCellOnError(cell: MarketCell, errorMessage: string) {
+  const supabase = createServiceClient()
+  const retryCount = cell.retry_count + 1
+  const backoffHours = Math.min(24, Math.pow(4, retryCount - 1))  // 1h, 4h, 16h, 24h
+  const status = retryCount >= 5 ? 'dead' : 'error'
+  const nextRetryAt = new Date(Date.now() + backoffHours * 3600 * 1000).toISOString()
+
+  await supabase
+    .from('market_cells')
+    .update({
+      status,
+      retry_count: retryCount,
+      next_retry_at: nextRetryAt,
+      last_error: errorMessage.slice(0, 500),
+    })
+    .eq('id', cell.id)
+}
+
+// ── Apify ────────────────────────────────────────────────────────────────────
+
+interface ApifyDiscoveryRunInput {
+  query: string
+  lat: number
+  lng: number
+  radiusKm: number
+  maxResults: number
+}
+
+async function apifyDiscoveryRun(input: ApifyDiscoveryRunInput): Promise<ApifyPlace[]> {
+  const token = process.env.APIFY_API_TOKEN
+  if (!token) throw new Error('APIFY_API_TOKEN is not configured')
+
+  const client = new ApifyClient({ token })
+  const run = await client.actor(APIFY_GMAPS_ACTOR).call({
+    searchStringsArray: [input.query],
+    customGeolocation: {
+      type: 'Point',
+      coordinates: [input.lng, input.lat],
+      radiusKm: input.radiusKm,
+    },
+    maxCrawledPlacesPerSearch: input.maxResults,
+    language: 'en',
+    reviewsCount: REVIEWS_PER_DISCOVERY,
+  })
+  const { items } = await client.dataset(run.defaultDatasetId).listItems()
+  return items as unknown as ApifyPlace[]
+}
+
+async function apifyRefreshRun(placeUrls: string[]): Promise<ApifyPlace[]> {
+  const token = process.env.APIFY_API_TOKEN
+  if (!token) throw new Error('APIFY_API_TOKEN is not configured')
+  if (placeUrls.length === 0) return []
+
+  const client = new ApifyClient({ token })
+  const run = await client.actor(APIFY_GMAPS_ACTOR).call({
+    startUrls: placeUrls.map((url) => ({ url })),
+    reviewsCount: REVIEWS_PER_REFRESH,
+    language: 'en',
+  })
+  const { items } = await client.dataset(run.defaultDatasetId).listItems()
+  return items as unknown as ApifyPlace[]
+}
+
+// ── Debit ────────────────────────────────────────────────────────────────────
+
+async function debitApifySpend(workspaceId: string, cents: number) {
+  if (cents <= 0) return
+  const supabase = createServiceClient()
+  const rounded = Math.max(1, Math.round(cents))
+  // Use RPC-less increment via raw expression to avoid race with the cron.
+  // Two writes from different ticks will serialise correctly because
+  // Postgres serialises UPDATE on the same row, but we do read-then-write
+  // here for simplicity; budget breach is checked at the start of the next
+  // slice anyway, so a small overshoot is acceptable.
+  const { data: ws } = await supabase
+    .from('workspaces')
+    .select('apify_spend_cents_month')
+    .eq('id', workspaceId)
+    .single()
+  await supabase
+    .from('workspaces')
+    .update({ apify_spend_cents_month: (ws?.apify_spend_cents_month ?? 0) + rounded })
+    .eq('id', workspaceId)
+}
+
+// ── Discovery slice ──────────────────────────────────────────────────────────
+
+async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
+  const supabase = createServiceClient()
+  const limits = getPlanLimits(workspace.plan)
+  const cell = await claimNextCell(workspace.id)
+
+  if (!cell) {
+    // No workable cell. Hand off to expander (if available); for now mark
+    // tam_status fully_scanned when expander reports nothing to add.
     return {
       skipped: true,
-      skipReason: `Search "${query}" in "${location}" already ran within 24h`,
+      skipReason: 'No pending cells available',
+      mode: 'discovery',
+      cellsScanned: 0,
       leadsFound: 0,
       leadsEnriched: 0,
-      searchQuery: query,
-      locationQuery: location,
+      hotLeadsCreated: 0,
+      apifySpendCents: 0,
     }
   }
 
-  // 6. Call Apify
-  const apifyToken = process.env.APIFY_API_TOKEN
-  console.log(`[agent] APIFY_API_TOKEN set=${!!apifyToken}`)
-  if (!apifyToken) throw new Error('APIFY_API_TOKEN is not configured')
+  console.log(`[agent] Workspace ${workspace.id} claimed cell ${cell.id} (${cell.query} @ ${cell.lat},${cell.lng} r=${cell.radius_km}km)`)
 
-  const limits = getPlanLimits(workspace.plan)
-  const maxResults = limits.maxLeadsPerSearch
-
-  console.log(`[agent] Searching "${query}" in "${location}" (max ${maxResults})`)
-
-  const apifyClient = new ApifyClient({ token: apifyToken })
-  const run = await apifyClient.actor('nwua9Gu5YrADL7ZDj').call({
-    searchStringsArray: [query],
-    locationQuery: location,
-    maxCrawledPlacesPerSearch: maxResults,
-    language: 'en',
-    reviewsCount: 5,
-  })
-
-  const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems()
-  const places = items as ApifyPlace[]
-
-  if (places.length === 0) {
-    await supabase.from('agent_runs').insert({
-      workspace_id: workspaceId,
-      search_query: query,
-      location_query: location,
-      fingerprint,
-      leads_found: 0,
-      leads_enriched: 0,
-      status: 'done',
+  try {
+    const places = await apifyDiscoveryRun({
+      query: cell.query,
+      lat: Number(cell.lat),
+      lng: Number(cell.lng),
+      radiusKm: Number(cell.radius_km),
+      maxResults: limits.maxLeadsPerRun,
     })
-    return { skipped: false, leadsFound: 0, leadsEnriched: 0, searchQuery: query, locationQuery: location }
-  }
+    const scrapedCount = places.length
 
-  // 7. Dedup: find place_ids already stored for this workspace
-  const incomingPlaceIds = places.map((p) => p.placeId).filter(Boolean) as string[]
+    // Charge per scraped place (we pay Apify regardless of dedup outcome).
+    await debitApifySpend(workspace.id, scrapedCount * APIFY_CENTS_PER_PLACE_DISCOVERY)
 
-  const { data: existingLeads } = await supabase
-    .from('leads')
-    .select('place_id')
-    .eq('workspace_id', workspaceId)
-    .in('place_id', incomingPlaceIds)
+    // ── Filter ─────────────────────────────────────────────────────────────
+    // 1. permanentlyClosed → skip
+    // 2. blocklist hits → skip
+    // 3. already-seen place_ids (intra-tick + DB) → skip from "new" math, do
+    //    not insert (dedup at DB layer via unique index)
+    const liveOnly = places.filter((p) => !p.permanentlyClosed)
 
-  const seenIds = new Set((existingLeads ?? []).map((l) => l.place_id).filter(Boolean))
-  const newPlaces = places.filter((p) => !p.placeId || !seenIds.has(p.placeId))
+    const incomingPlaceIds = liveOnly.map((p) => p.placeId).filter((x): x is string => Boolean(x))
 
-  if (newPlaces.length === 0) {
-    await supabase.from('agent_runs').insert({
-      workspace_id: workspaceId,
-      search_query: query,
-      location_query: location,
-      fingerprint,
-      leads_found: 0,
-      leads_enriched: 0,
-      status: 'done',
-    })
-    return { skipped: false, leadsFound: 0, leadsEnriched: 0, searchQuery: query, locationQuery: location }
-  }
+    const [{ data: blockedRows }, { data: existingRows }] = await Promise.all([
+      supabase.from('lead_blocklist').select('place_id').eq('workspace_id', workspace.id).in('place_id', incomingPlaceIds),
+      supabase.from('leads').select('place_id').eq('workspace_id', workspace.id).in('place_id', incomingPlaceIds),
+    ])
 
-  // 8. Create lead_searches record
-  const { data: searchRow, error: searchErr } = await supabase
-    .from('lead_searches')
-    .insert({
-      workspace_id: workspaceId,
-      category: query,
-      city: location,
-      country: null,
-      offer_description: workspace.offer_description,
-      status: 'done',
-      result_count: newPlaces.length,
-      apify_run_id: run.id,
-    })
-    .select()
-    .single()
+    const blocked = new Set((blockedRows ?? []).map((r) => r.place_id))
+    const existing = new Set((existingRows ?? []).map((r) => r.place_id).filter(Boolean) as string[])
 
-  if (searchErr || !searchRow) throw searchErr ?? new Error('Failed to create lead_searches row')
+    const newPlaces = liveOnly.filter(
+      (p) => p.placeId && !blocked.has(p.placeId) && !existing.has(p.placeId),
+    )
 
-  // 9. Insert new leads
-  const now = new Date().toISOString()
-  const leadRows = newPlaces.map((p) => ({
-    search_id: searchRow.id,
-    workspace_id: workspaceId,
-    name: p.title ?? null,
-    category: p.categoryName ?? null,
-    address: p.address ?? null,
-    phone: p.phone ?? null,
-    website: p.website ?? null,
-    rating: p.totalScore ?? null,
-    review_count: p.reviewsCount ?? null,
-    google_maps_url: p.url ?? null,
-    place_id: p.placeId ?? null,
-    surface_score: computeSurfaceScore(p),
-    has_booking_system: Boolean(
-      p.reserveTableUrl ||
-      (Array.isArray(p.bookingLinks) && p.bookingLinks.length > 0) ||
-      (Array.isArray(p.orderBy) && p.orderBy.length > 0)
-    ),
-    discovered_at: now,
-  }))
+    const dedupRatio = scrapedCount > 0 ? 1 - newPlaces.length / scrapedCount : 0
 
-  console.log(`[agent] Inserting ${leadRows.length} leads (discovered_at field included)`)
-  const { data: insertedLeads, error: insertErr } = await supabase
-    .from('leads')
-    .insert(leadRows)
-    .select()
+    // ── Decide cell next state ────────────────────────────────────────────
+    let nextStatus: MarketCell['status']
+    if (scrapedCount >= SPLIT_HARD_CAP && dedupRatio < 0.3) {
+      nextStatus = 'needs_split'
+    } else if (scrapedCount < limits.maxLeadsPerRun) {
+      // Apify returned fewer than we asked → cell is genuinely small. Done.
+      nextStatus = 'exhausted'
+    } else if (cell.last_dedup_ratio != null && Number(cell.last_dedup_ratio) >= DEDUP_RATIO_EXHAUSTED && dedupRatio >= DEDUP_RATIO_EXHAUSTED) {
+      nextStatus = 'exhausted'
+    } else {
+      nextStatus = 'partial'
+    }
 
-  if (insertErr) {
-    console.error('[agent] FAIL step=insert-leads code=' + insertErr.code, insertErr.message)
-    // If discovered_at column is missing (migration 008 not applied), retry without it
-    if (insertErr.code === '42703' && insertErr.message.includes('discovered_at')) {
-      console.warn('[agent] discovered_at column missing — retrying without it (apply migration 008 to fix)')
-      const rowsWithoutDiscoveredAt = leadRows.map(({ discovered_at: _d, ...rest }) => rest)
-      const { data: retryLeads, error: retryErr } = await supabase
+    // ── Insert leads ──────────────────────────────────────────────────────
+    let leadsInserted = 0
+    let hotCreated = 0
+    let enriched = 0
+
+    if (newPlaces.length > 0) {
+      // Create a lead_searches row (compat with existing pages that expect it).
+      const { data: searchRow, error: searchErr } = await supabase
+        .from('lead_searches')
+        .insert({
+          workspace_id:      workspace.id,
+          category:          cell.query,
+          city:              `${Number(cell.lat).toFixed(3)},${Number(cell.lng).toFixed(3)}`,
+          country:           null,
+          offer_description: workspace.offer_description,
+          status:            'done',
+          result_count:      newPlaces.length,
+        })
+        .select('id')
+        .single()
+
+      if (searchErr || !searchRow) throw searchErr ?? new Error('Failed to create lead_searches row')
+
+      const now = new Date().toISOString()
+      const rows = newPlaces.map((p) => ({
+        search_id:    searchRow.id,
+        workspace_id: workspace.id,
+        ...placeToLeadRow(p, now),
+      }))
+
+      // On conflict (workspace_id, place_id) → skip. Index from migration 008.
+      const { data: insertedLeads, error: insertErr } = await supabase
         .from('leads')
-        .insert(rowsWithoutDiscoveredAt)
-        .select()
-      if (retryErr) {
-        console.error('[agent] FAIL step=insert-leads-retry', retryErr)
-        throw retryErr
-      }
-      console.log(`[agent] Retry insert succeeded leadsInserted=${retryLeads?.length}`)
-      // Continue with retried leads (no discovered_at, "New" badge won't show)
-      const savedLeadsRetry = retryLeads ?? []
-      await supabase.from('agent_runs').insert({
-        workspace_id: workspaceId, search_query: query, location_query: location,
-        fingerprint, leads_found: savedLeadsRetry.length, leads_enriched: 0, status: 'done',
-      })
-      return { skipped: false, leadsFound: savedLeadsRetry.length, leadsEnriched: 0, searchQuery: query, locationQuery: location }
-    }
-    throw insertErr
-  }
+        .insert(rows)
+        .select('*')
 
-  const savedLeads = insertedLeads ?? []
-  let enrichedCount = 0
+      if (insertErr) throw insertErr
+      leadsInserted = insertedLeads?.length ?? 0
 
-  // 10. Auto-enrich leads with surface_score ≥ 60
-  const toEnrich = savedLeads.filter((l) => (l.surface_score ?? 0) >= 60 && l.website)
+      // ── Detectors + relevance ───────────────────────────────────────────
+      const hotLeads: Array<{ leadId: string; place: ApifyPlace; lead: typeof insertedLeads[number] }> = []
 
-  if (toEnrich.length > 0 && workspace.enrichment_credits > 0) {
-    const anthropic = new Anthropic()
-    const offerDescription = workspace.offer_description ?? 'Digital marketing and web services'
+      for (const lead of insertedLeads ?? []) {
+        const place = newPlaces.find((p) => p.placeId === lead.place_id)
+        if (!place) continue
 
-    for (const lead of toEnrich) {
-      if (enrichedCount >= workspace.enrichment_credits) break
+        // Optional website scrape for richer detectors (only on hot path)
+        // Skip the network call for "weak" looking leads to save time.
+        let scrape = null
+        const shouldScrape = Boolean(place.website) && (lead.surface_score ?? 0) >= 50
+        if (shouldScrape) scrape = await scrapeWebsite(place.website!)
 
-      try {
-        // Deduct 1 credit
-        const { data: updatedWs } = await supabase
-          .from('workspaces')
-          .update({ enrichment_credits: workspace.enrichment_credits - enrichedCount - 1 })
-          .eq('id', workspaceId)
-          .gt('enrichment_credits', 0)
-          .select('enrichment_credits')
-          .single()
-
-        if (!updatedWs) break // no credits left
-
-        await supabase.from('leads').update({ enrichment_status: 'loading' }).eq('id', lead.id)
-
-        const websiteScrape = await scrapeWebsite(lead.website!)
-        if (lead.has_booking_system) websiteScrape.hasBooking = true
-
-        const prompt = `You are a lead scoring assistant for a service agency.
-
-Agency offer: ${offerDescription}
-
-Business profile:
-- Name: ${lead.name}
-- Category: ${lead.category}
-- Rating: ${lead.rating ?? 'N/A'} (${lead.review_count ?? 0} reviews)
-- Address: ${lead.address ?? 'N/A'}
-- Has website: Yes
-- Website quality score: ${websiteScrape.qualityScore}/100
-- Has booking system: ${websiteScrape.hasBooking ? 'Yes' : 'No'}
-- Has social presence: ${websiteScrape.hasSocialPresence ? 'Yes' : 'No'}
-- Social channels: ${Object.keys(websiteScrape.socialLinks).join(', ') || 'None found'}
-- Tech stack hints: ${websiteScrape.techHints.join(', ') || 'None detected'}
-${websiteScrape.bodyExcerpt ? `- Website excerpt: ${websiteScrape.bodyExcerpt}` : ''}
-
-Score this lead from 0-100 based on how likely they are to need and buy the agency's offer.
-Return ONLY valid JSON — no markdown, no explanation:
-{
-  "opportunity_score": <number 0-100>,
-  "score_reasoning": "<3-5 bullet points separated by newlines explaining the score>",
-  "review_sentiment": "<positive|mixed|negative>",
-  "outreach_email": "<full personalised cold email in the same language as the business location. Include subject line as first line starting with 'Subject: '>"
-}`
-
-        const message = await anthropic.messages.create({
-          model: 'claude-opus-4-5',
-          max_tokens: 1024,
-          messages: [{ role: 'user', content: prompt }],
+        const signals = detectAllSignals({
+          place: {
+            ...place,
+            review_count: place.reviewsCount,
+            rating: place.totalScore,
+            category: place.categoryName,
+          },
+          websiteScrape: scrape,
+          hasBookingFromMaps: placeHasBookingFromMaps(place),
         })
 
-        const raw = (message.content[0] as { type: string; text: string }).text.trim()
-        const aiResult = JSON.parse(raw)
+        const r = computeRelevance({
+          signals,
+          workspaceServices: workspace.icp_services,
+          surfaceScore: lead.surface_score,
+        })
+
+        if (signals.length > 0) {
+          await supabase.from('lead_signals').upsert(
+            signals.map((s) => ({
+              lead_id: lead.id,
+              workspace_id: workspace.id,
+              type: s.type as string,
+              severity: s.severity,
+              evidence: s.evidence as unknown as Json,
+              detected_at: new Date().toISOString(),
+            })),
+            { onConflict: 'lead_id,type' },
+          )
+        }
 
         await supabase
           .from('leads')
           .update({
-            enrichment_status: 'done',
-            enriched_at: new Date().toISOString(),
-            website_tech: websiteScrape.techHints.length > 0 ? websiteScrape.techHints : null,
-            website_quality_score: websiteScrape.qualityScore || null,
-            has_booking_system: websiteScrape.hasBooking,
-            has_social_presence: websiteScrape.hasSocialPresence,
-            social_links: Object.keys(websiteScrape.socialLinks).length > 0
-              ? websiteScrape.socialLinks
-              : null,
-            review_sentiment: aiResult.review_sentiment ?? null,
-            opportunity_score: aiResult.opportunity_score ?? null,
-            score_reasoning: aiResult.score_reasoning ?? null,
-            outreach_email: aiResult.outreach_email ?? null,
+            intent_score: r.intent_score,
+            relevance:    r.relevance,
+            website_tech: scrape?.techHints && scrape.techHints.length > 0 ? scrape.techHints : null,
+            website_quality_score: scrape?.qualityScore ?? null,
+            has_social_presence:   scrape?.hasSocialPresence ?? null,
+            social_links: scrape && Object.keys(scrape.socialLinks).length > 0 ? scrape.socialLinks : null,
           })
           .eq('id', lead.id)
 
-        enrichedCount++
-      } catch (enrichErr) {
-        console.error(`[agent] Enrichment failed for lead ${lead.id}:`, enrichErr)
-        await supabase.from('leads').update({ enrichment_status: 'error' }).eq('id', lead.id)
+        if (r.relevance === 'hot') {
+          hotCreated++
+          hotLeads.push({ leadId: lead.id, place, lead })
+        }
       }
+
+      // ── Enrichment (hot only, gpt-4o-mini) ──────────────────────────────
+      let creditsAvailable = workspace.enrichment_credits ?? 0
+      for (const { leadId, place, lead } of hotLeads) {
+        if (creditsAvailable <= 0) break
+        try {
+          // Decrement first to claim the credit
+          const { data: updated } = await supabase
+            .from('workspaces')
+            .update({ enrichment_credits: creditsAvailable - 1 })
+            .eq('id', workspace.id)
+            .gt('enrichment_credits', 0)
+            .select('enrichment_credits')
+            .single()
+          if (!updated) break
+          creditsAvailable = updated.enrichment_credits
+
+          await supabase.from('leads').update({ enrichment_status: 'loading' }).eq('id', leadId)
+
+          const scrape = place.website
+            ? await scrapeWebsite(place.website).catch(() => null)
+            : null
+
+          const signalsForPrompt = detectAllSignals({
+            place: {
+              ...place,
+              review_count: place.reviewsCount,
+              rating: place.totalScore,
+              category: place.categoryName,
+            },
+            websiteScrape: scrape,
+            hasBookingFromMaps: placeHasBookingFromMaps(place),
+          })
+
+          const result = await enrichLead({
+            lead,
+            offerDescription: workspace.offer_description ?? 'Marketing services for local businesses.',
+            workspaceServices: workspace.icp_services,
+            signals: signalsForPrompt,
+            websiteScrape: scrape,
+          })
+
+          await supabase.from('leads').update({
+            enrichment_status: 'done',
+            enriched_at: new Date().toISOString(),
+            opportunity_score: result.opportunity_score,
+            score_reasoning: result.score_reasoning,
+            review_sentiment: result.review_sentiment,
+            outreach_email: result.outreach_email,
+            outreach_email_stale: false,
+          }).eq('id', leadId)
+          enriched++
+        } catch (err) {
+          console.error(`[agent] Enrich failed lead=${leadId}:`, err)
+          await supabase.from('leads').update({ enrichment_status: 'error' }).eq('id', leadId)
+        }
+      }
+    }
+
+    // ── Update cell ─────────────────────────────────────────────────────────
+    const updates: Partial<MarketCell> = {
+      status: nextStatus,
+      last_scanned_at: new Date().toISOString(),
+      scraped_count: cell.scraped_count + scrapedCount,
+      unique_count: cell.unique_count + leadsInserted,
+      last_dedup_ratio: Number(dedupRatio.toFixed(4)),
+    }
+    if (nextStatus === 'exhausted') updates.exhausted_at = new Date().toISOString()
+    await supabase.from('market_cells').update(updates).eq('id', cell.id)
+
+    // ── Quadtree split (spawn 4 children) ─────────────────────────────────
+    if (nextStatus === 'needs_split') {
+      const childRadius = Number(cell.radius_km) / 2
+      // Offset four child centers in a square; in lat/lng terms, 1 deg lat
+      // ~ 111km, scale lng by cos(lat).
+      const dLat = childRadius / 111
+      const dLng = childRadius / (111 * Math.cos((Number(cell.lat) * Math.PI) / 180))
+      const offsets: Array<[number, number]> = [[-1, -1], [-1, 1], [1, -1], [1, 1]]
+      const children = offsets.map(([sy, sx]) => ({
+        workspace_id: workspace.id,
+        query: cell.query,
+        lat: roundCoord(Number(cell.lat) + sy * dLat / 2),
+        lng: roundCoord(Number(cell.lng) + sx * dLng / 2),
+        radius_km: childRadius,
+        priority: cell.priority,
+        status: 'pending' as const,
+        parent_cell_id: cell.id,
+      }))
+      await supabase.from('market_cells').upsert(children, {
+        onConflict: 'workspace_id,query,lat,lng,radius_km',
+        ignoreDuplicates: true,
+      })
+    }
+
+    return {
+      skipped: false,
+      mode: 'discovery',
+      cellsScanned: 1,
+      leadsFound: leadsInserted,
+      leadsEnriched: enriched,
+      hotLeadsCreated: hotCreated,
+      apifySpendCents: Math.round(scrapedCount * APIFY_CENTS_PER_PLACE_DISCOVERY),
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    console.error(`[agent] Cell ${cell.id} failed:`, msg)
+    await releaseCellOnError(cell, msg)
+    return {
+      skipped: true,
+      skipReason: `Apify error: ${msg}`,
+      mode: 'discovery',
+      cellsScanned: 0,
+      leadsFound: 0,
+      leadsEnriched: 0,
+      hotLeadsCreated: 0,
+      apifySpendCents: 0,
+    }
+  }
+}
+
+// ── Refresh slice ────────────────────────────────────────────────────────────
+
+async function runRefreshSlice(workspace: Workspace): Promise<SliceResult> {
+  const supabase = createServiceClient()
+  const limits = getPlanLimits(workspace.plan)
+  const staleCutoff = new Date(Date.now() - limits.refreshIntervalDays * 86_400_000).toISOString()
+
+  // Stale leads = lastRefreshedAt or createdAt older than cutoff, not archived,
+  // not linked to a deal (those are already converted).
+  const { data: candidates } = await supabase
+    .from('leads')
+    .select('id, place_id, google_maps_url')
+    .eq('workspace_id', workspace.id)
+    .is('archived_at', null)
+    .or(`last_refreshed_at.lt.${staleCutoff},last_refreshed_at.is.null`)
+    .not('google_maps_url', 'is', null)
+    .order('last_refreshed_at', { ascending: true, nullsFirst: true })
+    .limit(Math.min(limits.maxLeadsPerRun, 25))
+
+  const urls = (candidates ?? [])
+    .map((c) => c.google_maps_url)
+    .filter((u): u is string => Boolean(u))
+
+  if (urls.length === 0) {
+    return {
+      skipped: true,
+      skipReason: 'No stale leads to refresh',
+      mode: 'refresh',
+      cellsScanned: 0,
+      leadsFound: 0,
+      leadsEnriched: 0,
+      hotLeadsCreated: 0,
+      apifySpendCents: 0,
     }
   }
 
-  // 11. Save agent_run record
+  try {
+    const places = await apifyRefreshRun(urls)
+    await debitApifySpend(workspace.id, places.length * APIFY_CENTS_PER_PLACE_REFRESH)
+
+    let hotCreated = 0
+    for (const place of places) {
+      if (!place.placeId) continue
+      const candidate = candidates!.find((c) => c.place_id === place.placeId)
+      if (!candidate) continue
+
+      const scrape = place.website ? await scrapeWebsite(place.website) : null
+      const signals = detectAllSignals({
+        place: {
+          ...place,
+          review_count: place.reviewsCount,
+          rating: place.totalScore,
+          category: place.categoryName,
+        },
+        websiteScrape: scrape,
+        hasBookingFromMaps: placeHasBookingFromMaps(place),
+      })
+
+      // Lookup previous relevance for the "new signal" transition.
+      const { data: prev } = await supabase
+        .from('leads')
+        .select('relevance, intent_score, surface_score')
+        .eq('id', candidate.id)
+        .single()
+
+      const r = computeRelevance({
+        signals,
+        workspaceServices: workspace.icp_services,
+        surfaceScore: prev?.surface_score,
+      })
+
+      if (signals.length > 0) {
+        await supabase.from('lead_signals').upsert(
+          signals.map((s) => ({
+            lead_id: candidate.id,
+            workspace_id: workspace.id,
+            type: s.type as string,
+            severity: s.severity,
+            evidence: s.evidence as unknown as Json,
+            detected_at: new Date().toISOString(),
+          })),
+          { onConflict: 'lead_id,type' },
+        )
+      }
+
+      await supabase.from('leads').update({
+        intent_score: r.intent_score,
+        relevance: r.relevance,
+        rating: place.totalScore ?? null,
+        review_count: place.reviewsCount ?? null,
+        last_refreshed_at: new Date().toISOString(),
+      }).eq('id', candidate.id)
+
+      if (prev?.relevance !== 'hot' && r.relevance === 'hot') hotCreated++
+    }
+
+    return {
+      skipped: false,
+      mode: 'refresh',
+      cellsScanned: 0,
+      leadsFound: places.length,
+      leadsEnriched: 0,
+      hotLeadsCreated: hotCreated,
+      apifySpendCents: Math.round(places.length * APIFY_CENTS_PER_PLACE_REFRESH),
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    console.error(`[agent] Refresh failed workspace=${workspace.id}:`, msg)
+    return {
+      skipped: true,
+      skipReason: `Apify refresh error: ${msg}`,
+      mode: 'refresh',
+      cellsScanned: 0,
+      leadsFound: 0,
+      leadsEnriched: 0,
+      hotLeadsCreated: 0,
+      apifySpendCents: 0,
+    }
+  }
+}
+
+// ── Slice driver ─────────────────────────────────────────────────────────────
+
+export async function runSliceForWorkspace(
+  workspaceId: string,
+  options: RunOptions = {},
+): Promise<SliceResult> {
+  const supabase = createServiceClient()
+
+  const { data: workspaceRaw, error } = await supabase
+    .from('workspaces')
+    .select('*')
+    .eq('id', workspaceId)
+    .single()
+  if (error || !workspaceRaw) throw new Error(`Workspace ${workspaceId} not found`)
+  const workspace = workspaceRaw as Workspace
+
+  // 1. Lifecycle
+  const lifecycle = lifecycleSkipReason(workspace)
+  if (lifecycle) {
+    if (lifecycle === 'trial expired') {
+      await supabase.from('workspaces').update({ tam_status: 'expired' }).eq('id', workspaceId)
+    }
+    return {
+      skipped: true, skipReason: lifecycle,
+      cellsScanned: 0, leadsFound: 0, leadsEnriched: 0, hotLeadsCreated: 0, apifySpendCents: 0,
+    }
+  }
+
+  // 2. Monthly budget reset
+  await maybeResetMonthlyBudget(workspaceId, workspace)
+  const limits = getPlanLimits(workspace.plan)
+  if (workspace.apify_spend_cents_month >= limits.monthlyApifyBudgetCents) {
+    return {
+      skipped: true, skipReason: 'monthly Apify budget exhausted',
+      cellsScanned: 0, leadsFound: 0, leadsEnriched: 0, hotLeadsCreated: 0, apifySpendCents: 0,
+    }
+  }
+
+  // 3. Ensure cells exist (first-run seeding)
+  const cellCount = await ensureCellsSeeded(workspace)
+  if (cellCount === 0) {
+    return {
+      skipped: true, skipReason: 'No cells could be seeded for this workspace',
+      cellsScanned: 0, leadsFound: 0, leadsEnriched: 0, hotLeadsCreated: 0, apifySpendCents: 0,
+    }
+  }
+
+  // 4. Pick mode
+  let mode = options.mode
+  if (!mode) {
+    // Refresh only when there's something to refresh AND random pick.
+    const wantRefresh = Math.random() < 0.3
+    if (wantRefresh) {
+      const cutoff = new Date(Date.now() - limits.refreshIntervalDays * 86_400_000).toISOString()
+      const { count } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('workspace_id', workspaceId)
+        .is('archived_at', null)
+        .or(`last_refreshed_at.lt.${cutoff},last_refreshed_at.is.null`)
+      mode = (count ?? 0) > 0 ? 'refresh' : 'discovery'
+    } else {
+      mode = 'discovery'
+    }
+  }
+
+  // 5. Run slice
+  const result = mode === 'refresh'
+    ? await runRefreshSlice(workspace)
+    : await runDiscoverySlice(workspace)
+
+  // 6. Schedule next_run_at
+  const inBurst = isInTrialBurst(workspace)
+  const stillHasBudget = (workspace.apify_spend_cents_month + result.apifySpendCents) < limits.monthlyApifyBudgetCents
+  const burstIter = options.burstIteration ?? 0
+  const canBurstAgain = inBurst && stillHasBudget && burstIter < 20 && !result.skipped && (result.leadsFound > 0 || result.cellsScanned > 0)
+
+  const nextRunAt = canBurstAgain
+    ? new Date(Date.now() + 1_000).toISOString()  // ~immediate; the cron tick will see and pick again
+    : new Date(Date.now() + limits.runIntervalHours * 3600 * 1000).toISOString()
+
+  await supabase
+    .from('workspaces')
+    .update({ next_run_at: nextRunAt })
+    .eq('id', workspaceId)
+
+  // 7. Persist agent_runs row (lightweight observability)
   await supabase.from('agent_runs').insert({
     workspace_id: workspaceId,
-    search_query: query,
-    location_query: location,
-    fingerprint,
-    leads_found: savedLeads.length,
-    leads_enriched: enrichedCount,
-    status: 'done',
+    search_query: result.mode ?? 'idle',
+    location_query: '',
+    fingerprint: result.mode ?? 'idle',
+    leads_found: result.leadsFound,
+    leads_enriched: result.leadsEnriched,
+    status: result.skipped ? 'skipped' : 'done',
+    error_message: result.skipReason ?? null,
   })
 
+  return result
+}
+
+// ── Legacy alias kept so the existing onboarding fire-and-forget keeps
+// working until the UI rewires to the new /api/cron/tick endpoint. The old
+// route `/api/agent/run` calls this. ────────────────────────────────────────
+
+export async function runAgentForWorkspace(workspaceId: string): Promise<{
+  skipped: boolean
+  skipReason?: string
+  leadsFound: number
+  leadsEnriched: number
+}> {
+  const r = await runSliceForWorkspace(workspaceId)
   return {
-    skipped: false,
-    leadsFound: savedLeads.length,
-    leadsEnriched: enrichedCount,
-    searchQuery: query,
-    locationQuery: location,
+    skipped: r.skipped,
+    skipReason: r.skipReason,
+    leadsFound: r.leadsFound,
+    leadsEnriched: r.leadsEnriched,
   }
+}
+
+// ── Local utility ────────────────────────────────────────────────────────────
+
+function roundCoord(n: number): number {
+  return Math.round(n * 1_000_000) / 1_000_000
 }

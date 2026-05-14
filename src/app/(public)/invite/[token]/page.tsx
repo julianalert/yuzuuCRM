@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useTransition } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -11,14 +11,13 @@ type Invitation = {
   isExistingUser: boolean
 }
 
-type PageState = 'loading' | 'form' | 'accepting' | 'check_email' | 'error'
+type PageState = 'loading' | 'form' | 'accepting' | 'error'
 
 export default function InvitePage() {
   const { token } = useParams<{ token: string }>()
   const [invitation, setInvitation] = useState<Invitation | null>(null)
   const [pageState, setPageState] = useState<PageState>('loading')
   const [error, setError] = useState<string | null>(null)
-  const [isPending, startTransition] = useTransition()
 
   // Try to accept the invitation using the current authenticated session.
   async function acceptWithSession() {
@@ -113,48 +112,6 @@ export default function InvitePage() {
     })
   }
 
-  async function handlePasswordSubmit(formData: FormData) {
-    if (!invitation) return
-    setError(null)
-
-    startTransition(async () => {
-      const supabase = createClient()
-      const password = formData.get('password') as string
-      const fullName = formData.get('full_name') as string | null
-
-      // Try sign-in first; if the account doesn't exist yet, fall back to sign-up.
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: invitation.email,
-        password,
-      })
-
-      if (signInError) {
-        if (signInError.message.toLowerCase().includes('invalid login credentials') ||
-            signInError.message.toLowerCase().includes('invalid credentials')) {
-          // No account with this password — create one
-          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-            email: invitation.email,
-            password,
-            options: { data: { full_name: fullName ?? '' } },
-          })
-          if (signUpError) {
-            setError(signUpError.message)
-            return
-          }
-          if (!signUpData.session) {
-            setPageState('check_email')
-            return
-          }
-        } else {
-          setError(signInError.message)
-          return
-        }
-      }
-
-      await acceptWithSession()
-    })
-  }
-
   // ── Render states ────────────────────────────────────────────────────────────
 
   if (pageState === 'loading' || pageState === 'accepting') {
@@ -164,24 +121,6 @@ export default function InvitePage() {
           <div style={{ color: 'var(--text-3)', fontSize: 14 }}>
             {pageState === 'accepting' ? 'Joining workspace…' : 'Loading invitation…'}
           </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (pageState === 'check_email') {
-    return (
-      <div className="auth-page">
-        <div className="auth-card" style={{ textAlign: 'center' }}>
-          <div className="auth-logo">
-            <div className="logo-mark">Y</div>
-            <span>Yuzuu</span>
-          </div>
-          <h1 className="auth-title" style={{ marginTop: 16 }}>Check your email</h1>
-          <p style={{ color: 'var(--text-3)', fontSize: 14, marginTop: 8 }}>
-            We sent a confirmation link to <strong>{invitation?.email}</strong>.
-            Click it to finish signing up and join <strong>{invitation?.workspace.name}</strong>.
-          </p>
         </div>
       </div>
     )
@@ -219,11 +158,10 @@ export default function InvitePage() {
           Join <strong>{invitation?.workspace.name}</strong> on Yuzuu
         </p>
 
-        {/* Google sign-in — always available */}
         <button
           type="button"
           className="btn btn-secondary"
-          style={{ width: '100%', justifyContent: 'center', padding: '10px 14px', marginBottom: 12 }}
+          style={{ width: '100%', justifyContent: 'center', padding: '10px 14px' }}
           onClick={handleGoogleSignIn}
         >
           <svg width="18" height="18" viewBox="0 0 48 48" style={{ marginRight: 8, flexShrink: 0 }}>
@@ -234,62 +172,6 @@ export default function InvitePage() {
           </svg>
           Continue with Google
         </button>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px', color: 'var(--text-3)', fontSize: 12 }}>
-          <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-          or use email &amp; password
-          <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-        </div>
-
-        <form action={handlePasswordSubmit}>
-          {error && <div className="auth-error">{error}</div>}
-
-          <div className="form-group">
-            <label className="form-label">Email</label>
-            <input
-              className="form-input"
-              value={invitation?.email ?? ''}
-              readOnly
-              style={{ background: 'var(--bg)', color: 'var(--text-3)' }}
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="full_name">Full name</label>
-            <input
-              id="full_name"
-              name="full_name"
-              type="text"
-              className="form-input"
-              placeholder="Your name"
-              required
-              autoComplete="name"
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="password">Password</label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              className="form-input"
-              placeholder={invitation?.isExistingUser ? 'Your existing password' : 'Min. 8 characters'}
-              required
-              minLength={invitation?.isExistingUser ? undefined : 8}
-              autoComplete={invitation?.isExistingUser ? 'current-password' : 'new-password'}
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary"
-            style={{ width: '100%', justifyContent: 'center', padding: '10px 14px' }}
-            disabled={isPending}
-          >
-            {isPending ? 'Joining…' : 'Accept invitation'}
-          </button>
-        </form>
       </div>
     </div>
   )

@@ -946,3 +946,97 @@ td {
   color: var(--text-3);
   margin-top: 20px;
 }
+
+/* ── Auth split layout (signup) ── */
+.auth-split {
+  min-height: 100vh;
+  display: flex;
+}
+
+.auth-split-form {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  background: var(--surface);
+}
+
+.auth-split-panel {
+  width: 46%;
+  flex-shrink: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+}
+
+@media (max-width: 800px) {
+  .auth-split { flex-direction: column; }
+  .auth-split-panel { width: 100%; padding: 32px 24px; }
+}
+
+/* ── Testimonial card ── */
+.testimonial-card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 32px 32px 28px;
+  max-width: 400px;
+  width: 100%;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.28);
+}
+
+.testimonial-quote-mark {
+  font-size: 52px;
+  line-height: 1;
+  color: var(--green);
+  font-family: Georgia, serif;
+  margin-bottom: 8px;
+  margin-left: -3px;
+  display: block;
+}
+
+.testimonial-body {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--text-1);
+  margin-bottom: 24px;
+}
+
+.testimonial-author {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.testimonial-avatar-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--bg);
+  border: 2px solid var(--border);
+}
+
+.testimonial-avatar-img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+
+.testimonial-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: -0.2px;
+}
+
+.testimonial-role {
+  font-size: 12.5px;
+  color: var(--text-3);
+  margin-top: 2px;
+}

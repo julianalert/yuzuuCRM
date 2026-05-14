@@ -208,20 +208,9 @@ function StepBrand({
 
       const newSlug: string = renameData.slug
 
-      const extractRes = await fetch('/api/brand/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ websiteUrl: websiteUrl.trim() }),
-      })
-      const extractData = await extractRes.json()
-      if (!extractRes.ok) throw new Error(extractData.error ?? 'Failed to extract brand profile')
-
-      store.setOfferDescription(extractData.offerDescription ?? '')
-      store.setBrandSummary(extractData.brandSummary ?? '')
       store.setStep(2)
 
       if (newSlug !== slug) {
-        // Update the address bar silently — no Next.js navigation, no remount.
         window.history.replaceState({}, '', `/${newSlug}/onboarding`)
         onSlugChange(newSlug)
       }
@@ -242,13 +231,13 @@ function StepBrand({
           Set up your workspace
         </h1>
         <p style={{ fontSize: 15, color: 'var(--text-3)', lineHeight: 1.5 }}>
-          Enter your website and we&rsquo;ll build your brand profile automatically.
+          Tell us who you are to get started.
         </p>
       </div>
 
       <div className="card" style={{ padding: 28 }}>
         <div className="form-group" style={{ marginBottom: 20 }}>
-          <label className="form-label">Company name</label>
+          <label className="form-label">Your agency name</label>
           <input
             className="form-input"
             value={companyName}
@@ -269,9 +258,6 @@ function StepBrand({
             placeholder="https://your-agency.com"
             type="url"
           />
-          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
-            We&rsquo;ll read your website to understand what you sell and craft a lead scoring offer.
-          </div>
         </div>
 
         <button
@@ -281,7 +267,7 @@ function StepBrand({
           disabled={loading || !companyName.trim() || !websiteUrl.trim() || !isValidUrl(websiteUrl)}
         >
           {loading ? (
-            <><span className="spinner" /> Analysing your website…</>
+            <><span className="spinner" /> Saving…</>
           ) : (
             <>Continue →</>
           )}
@@ -479,6 +465,7 @@ function StepMarket({
           icp_services: store.services,
           icp_niches: niches,
           icp_city: trimmed,
+          send_welcome_email: true,
         }),
       })
       const data = await res.json()

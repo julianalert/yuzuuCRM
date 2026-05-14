@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 import { requireAuth, errorResponse } from '@/lib/api-auth'
 
-const anthropic = new Anthropic()
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 function extractTextFromHtml(html: string): string {
   // Pull out the most useful metadata for Claude
@@ -65,9 +65,8 @@ export async function POST(req: NextRequest) {
       pageText = `Website URL: ${url} (could not fetch content)`
     }
 
-    const message = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 512,
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
       messages: [
         {
           role: 'user',
@@ -83,9 +82,12 @@ Return ONLY valid JSON in this exact shape — no markdown, no explanation:
 }`,
         },
       ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+      max_tokens: 400,
     })
 
-    const raw = (message.content[0] as { type: string; text: string }).text.trim()
+    const raw = (response.choices[0]?.message?.content ?? '{}').trim()
     const parsed = JSON.parse(raw)
 
     return Response.json({

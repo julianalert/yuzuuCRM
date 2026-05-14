@@ -15,6 +15,13 @@ export type SequenceStepLog = Database['public']['Tables']['sequence_step_logs']
 export type LeadSearch = Database['public']['Tables']['lead_searches']['Row']
 export type Lead = Database['public']['Tables']['leads']['Row']
 export type AgentRun = Database['public']['Tables']['agent_runs']['Row']
+export type MarketCell = Database['public']['Tables']['market_cells']['Row']
+export type LeadSignal = Database['public']['Tables']['lead_signals']['Row']
+export type LeadBlocklistEntry = Database['public']['Tables']['lead_blocklist']['Row']
+export type GeocodeCacheEntry = Database['public']['Tables']['geocode_cache']['Row']
+
+export type LeadRelevance = Lead['relevance']
+export type MarketCellStatus = MarketCell['status']
 
 export type TamBuildJob = Database['public']['Tables']['tam_build_jobs']['Row']
 export type AccountStatus = Account['status']

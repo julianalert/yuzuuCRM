@@ -39,12 +39,23 @@ export default async function SignalsPage({ params }: Props) {
       lead_searches ( category, city, country )
     `)
     .eq('workspace_id', workspace.id)
+    .is('archived_at', null)
     .order('created_at', { ascending: false })
     .limit(500)
+
+  const leadIds = (leads ?? []).map((l) => l.id)
+  const { data: signals } = leadIds.length > 0
+    ? await supabase
+        .from('lead_signals')
+        .select('id, lead_id, type, severity, evidence, detected_at')
+        .in('lead_id', leadIds)
+        .order('detected_at', { ascending: false })
+    : { data: [] }
 
   return (
     <SignalsView
       leads={leads ?? []}
+      signals={signals ?? []}
       slug={slug}
     />
   )

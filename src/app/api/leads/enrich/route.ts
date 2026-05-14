@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 import { requireAuth, errorResponse } from '@/lib/api-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 
-const anthropic = new Anthropic()
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 interface SocialLinks {
   instagram?: string
@@ -210,13 +210,15 @@ Return ONLY valid JSON — no markdown, no explanation:
   "outreach_email": "<full personalised cold email in the same language as the business location. Include subject line as first line starting with 'Subject: '>"
 }`
 
-    const message = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 1024,
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.4,
+      max_tokens: 700,
     })
 
-    const raw = (message.content[0] as { type: string; text: string }).text.trim()
+    const raw = (response.choices[0]?.message?.content ?? '{}').trim()
     const aiResult = JSON.parse(raw)
 
     // Update lead with enriched data — Supabase Realtime will push this to the client

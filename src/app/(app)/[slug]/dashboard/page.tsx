@@ -45,35 +45,39 @@ export default async function DashboardPage({ params }: Props) {
     { data: workspace },
     { count: leadCount },
     { data: leadScores },
-    { count: signalLeadCount },
+    { count: hotLeadCount },
     { data: openDeals },
     { data: hotLeads },
     { data: closingDeals },
+    { data: cellStats },
   ] = await Promise.all([
     supabase.from('workspaces').select('*').eq('id', workspaceId).single(),
 
-    // Total leads
-    supabase.from('leads').select('*', { count: 'exact', head: true }).eq('workspace_id', workspaceId),
-
-    // Avg surface score
-    supabase.from('leads').select('surface_score').eq('workspace_id', workspaceId).not('surface_score', 'is', null),
-
-    // Signals: leads with at least one raw signal
     supabase.from('leads').select('*', { count: 'exact', head: true })
       .eq('workspace_id', workspaceId)
-      .or('website.is.null,rating.lt.4,review_count.lt.20'),
+      .is('archived_at', null),
 
-    // Open pipeline value
+    supabase.from('leads').select('surface_score').eq('workspace_id', workspaceId).not('surface_score', 'is', null),
+
+    // Hot leads: actually relevance-routed by the intent engine
+    supabase.from('leads').select('*', { count: 'exact', head: true })
+      .eq('workspace_id', workspaceId)
+      .eq('relevance', 'hot')
+      .is('archived_at', null),
+
     supabase.from('deals').select('value').eq('workspace_id', workspaceId)
       .is('deleted_at', null)
       .not('stage', 'in', '("closed_won","closed_lost")'),
 
-    // Hot leads — top 5 by surface_score, enriched ones bump up via opportunity_score ordering
+    // Hot leads — pick by intent_score first now that we have it, with
+    // opportunity_score (post-enrichment) as a tiebreaker.
     supabase.from('leads')
-      .select('id, name, category, website, rating, review_count, surface_score, opportunity_score, enrichment_status, lead_searches(category, city, country)')
+      .select('id, name, category, website, rating, review_count, surface_score, opportunity_score, intent_score, relevance, enrichment_status, lead_searches(category, city, country)')
       .eq('workspace_id', workspaceId)
+      .is('archived_at', null)
+      .eq('relevance', 'hot')
+      .order('intent_score', { ascending: false, nullsFirst: false })
       .order('opportunity_score', { ascending: false, nullsFirst: false })
-      .order('surface_score', { ascending: false })
       .limit(5),
 
     // Deals closing in the next 30 days
@@ -86,7 +90,24 @@ export default async function DashboardPage({ params }: Props) {
       .lte('close_date', in30Days)
       .order('close_date', { ascending: true })
       .limit(5),
+
+    // Market coverage stats from market_cells
+    supabase.from('market_cells').select('status').eq('workspace_id', workspaceId),
   ])
+
+  const cellCounts = (cellStats ?? []).reduce(
+    (acc, c) => {
+      acc.total++
+      if (c.status === 'exhausted' || c.status === 'dead') acc.done++
+      else if (c.status === 'scanning' || c.status === 'partial') acc.inProgress++
+      else if (c.status === 'pending') acc.pending++
+      return acc
+    },
+    { total: 0, done: 0, inProgress: 0, pending: 0 },
+  )
+  const coveragePct = cellCounts.total > 0
+    ? Math.round((cellCounts.done / cellCounts.total) * 100)
+    : 0
 
   const avgScore = leadScores && leadScores.length > 0
     ? Math.round(leadScores.reduce((sum, l) => sum + (l.surface_score ?? 0), 0) / leadScores.length)
@@ -100,15 +121,15 @@ export default async function DashboardPage({ params }: Props) {
 
   const stats = [
     { label: 'Total Leads',    value: (leadCount ?? 0).toLocaleString(),        delta: 'across all searches',          up: true },
+    { label: 'Hot Leads',      value: (hotLeadCount ?? 0).toLocaleString(),     delta: 'matched to your services',      up: true },
     { label: 'Avg Lead Score', value: avgScore > 0 ? avgScore.toString() : '—', delta: 'surface score average',         up: avgScore >= 60 },
-    { label: 'Signals',        value: (signalLeadCount ?? 0).toLocaleString(),  delta: 'leads with opportunities',     up: true },
     { label: 'Open Pipeline',  value: formatCurrency(openPipelineValue),        delta: `${openDeals?.length ?? 0} active deals`, up: true },
   ]
 
   return (
     <div className="page-enter">
       {/* Trial banner */}
-      {workspace?.subscription_status === 'trialing' && trialDaysLeft !== null && trialDaysLeft <= 7 && (
+      {workspace?.subscription_status === 'trialing' && trialDaysLeft !== null && trialDaysLeft <= 1 && (
         <div style={{
           background: 'var(--amber-bg)', border: '1px solid #F0D090', borderRadius: 'var(--radius)',
           padding: '10px 16px', fontSize: 13, marginBottom: 16,
@@ -148,6 +169,58 @@ export default async function DashboardPage({ params }: Props) {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Market Coverage — full width because density of info matters more
+          than horizontal compactness here */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <span className="card-title">Market Coverage</span>
+          {workspace?.tam_status === 'fully_scanned' && (
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
+              background: 'rgba(45,164,78,0.14)', color: 'var(--green, #2da44e)',
+            }}>
+              TAM fully scanned
+            </span>
+          )}
+        </div>
+        <div className="card-body" style={{ padding: '20px 20px 24px' }}>
+          {cellCounts.total === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
+              Your agent is building your market map. It will populate within the next agent run.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+                <span style={{ fontSize: 32, fontWeight: 700, letterSpacing: '-0.02em' }}>{coveragePct}%</span>
+                <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                  of your market scanned · {cellCounts.done} of {cellCounts.total} zones complete
+                </span>
+              </div>
+              <div style={{
+                width: '100%', height: 8, borderRadius: 999, background: 'var(--border)', overflow: 'hidden',
+                marginBottom: 14,
+              }}>
+                <div style={{
+                  width: `${coveragePct}%`, height: '100%',
+                  background: coveragePct >= 80 ? 'var(--green, #2da44e)' : 'var(--text-1)',
+                  transition: 'width 300ms',
+                }} />
+              </div>
+              <div style={{ display: 'flex', gap: 28, fontSize: 12.5, color: 'var(--text-3)', flexWrap: 'wrap' }}>
+                <span><strong style={{ color: 'var(--text-1)' }}>{cellCounts.pending}</strong> pending</span>
+                <span><strong style={{ color: 'var(--text-1)' }}>{cellCounts.inProgress}</strong> in progress</span>
+                <span><strong style={{ color: 'var(--text-1)' }}>{cellCounts.done}</strong> exhausted</span>
+              </div>
+              {workspace?.tam_status === 'fully_scanned' && (
+                <div style={{ marginTop: 14, fontSize: 12.5, color: 'var(--text-3)', lineHeight: 1.55 }}>
+                  Every zone in your target market has been scanned. Your agent will now keep existing leads fresh and surface changes (new businesses, review shifts) as they happen.
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       <div className="grid-2">

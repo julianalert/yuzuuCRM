@@ -16,14 +16,73 @@ type LeadWithSearch = Lead & {
   lead_searches: { category: string | null; city: string | null; country: string | null } | null
 }
 
+type SignalChip = { type: string; severity: number }
+
 interface Props {
   workspace: Workspace
   initialLeads: LeadWithSearch[]
+  initialSignalsByLead?: Record<string, SignalChip[]>
   slug: string
 }
 
-type SortKey = 'surface_score' | 'opportunity_score' | 'rating' | 'review_count' | 'name'
+type SortKey = 'intent_score' | 'surface_score' | 'opportunity_score' | 'rating' | 'review_count' | 'name'
 type SortDir = 'asc' | 'desc'
+type LeadTab = 'hot' | 'warm' | 'all' | 'backlog'
+
+const SIGNAL_LABELS: Record<string, string> = {
+  owner_unresponsive:          'Owner not replying',
+  negative_review_streak:      'Negative reviews',
+  review_velocity_drop:        'Reviews stopped',
+  review_velocity_spike:       'Review surge',
+  recently_opened:             'New business',
+  no_tracking_pixel:           'No ads tracking',
+  outdated_stack:              'Outdated site',
+  no_booking_on_needs_booking: 'No booking',
+  phone_only:                  'Phone-only',
+  no_social:                   'No social',
+  no_website:                  'No website',
+  low_rating:                  'Low rating',
+}
+
+function SignalChips({ signals }: { signals: SignalChip[] | undefined }) {
+  if (!signals || signals.length === 0) return null
+  const top = signals.slice(0, 3)
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+      {top.map((s) => (
+        <span key={s.type} style={{
+          fontSize: 10.5, fontWeight: 500,
+          padding: '2px 7px', borderRadius: 999,
+          background: 'rgba(245,200,66,0.18)', color: '#92660a',
+        }}>
+          {SIGNAL_LABELS[s.type] ?? s.type}
+        </span>
+      ))}
+      {signals.length > top.length && (
+        <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>+{signals.length - top.length}</span>
+      )}
+    </div>
+  )
+}
+
+function RelevancePill({ relevance }: { relevance: string | null | undefined }) {
+  if (!relevance) return null
+  const styles: Record<string, { bg: string; color: string; label: string }> = {
+    hot:  { bg: 'rgba(229,83,75,0.14)', color: '#c03d35', label: 'Hot' },
+    warm: { bg: 'rgba(245,200,66,0.18)', color: '#92660a', label: 'Warm' },
+    cold: { bg: 'rgba(0,0,0,0.05)',      color: 'var(--text-3)', label: 'Cold' },
+  }
+  const s = styles[relevance] ?? styles.cold
+  return (
+    <span style={{
+      display: 'inline-block', fontSize: 10, fontWeight: 700, padding: '1px 7px',
+      borderRadius: 20, background: s.bg, color: s.color,
+      letterSpacing: '0.04em', textTransform: 'uppercase',
+    }}>
+      {s.label}
+    </span>
+  )
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -541,15 +600,23 @@ function EnrichButton({ lead, onEnrich, credits }: {
 
 // ── Main View ─────────────────────────────────────────────────────────────────
 
-export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
+export function LeadFinderView({ workspace, initialLeads, initialSignalsByLead, slug }: Props) {
   const [leads, setLeads] = useState<LeadWithSearch[]>(initialLeads)
+  const [signalsByLead, setSignalsByLead] = useState<Record<string, SignalChip[]>>(initialSignalsByLead ?? {})
   const [selectedLead, setSelectedLead] = useState<LeadWithSearch | null>(null)
   const [showSearchModal, setShowSearchModal] = useState(false)
   const [trialLimited, setTrialLimited] = useState(false)
   const [credits, setCredits] = useState(workspace.enrichment_credits ?? 0)
-  const [sortKey, setSortKey] = useState<SortKey>('surface_score')
+  const [searching, setSearching] = useState(false)
+  const [sortKey, setSortKey] = useState<SortKey>('intent_score')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const supabase = createClient()
+  const [tab, setTab] = useState<LeadTab>(() => {
+    if (typeof window === 'undefined') return 'hot'
+    const t = new URLSearchParams(window.location.search).get('tab')
+    return (t === 'hot' || t === 'warm' || t === 'all' || t === 'backlog') ? t : 'hot'
+  })
+  const supabaseRef = useRef(createClient())
+  const supabase = supabaseRef.current
   const searchParams = useSearchParams()
   const [agentLastRan, setAgentLastRan] = useState<string | null>(null)
   const [agentRunning, setAgentRunning] = useState(() => searchParams.get('agentRunning') === '1')
@@ -643,11 +710,87 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [workspace.id, supabase])
+  // supabase is stabilised via useRef — intentionally omitted from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.id])
+
+  // Realtime: lead_signals inserts (signals appear as the runner detects them)
+  useEffect(() => {
+    const channel = supabase
+      .channel('lead-signals-workspace')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'lead_signals', filter: `workspace_id=eq.${workspace.id}` },
+        (payload) => {
+          const s = payload.new as { lead_id: string; type: string; severity: number }
+          setSignalsByLead((prev) => {
+            const existing = prev[s.lead_id] ?? []
+            if (existing.some((e) => e.type === s.type)) return prev
+            return { ...prev, [s.lead_id]: [...existing, { type: s.type, severity: s.severity }].sort((a, b) => b.severity - a.severity) }
+          })
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.id])
+
+  // Polling fallback while the agent is running.
+  // Covers the case where the Supabase Realtime channel doesn't deliver
+  // the INSERT event (publication not yet configured, cold connection, etc.).
+  // Stops as soon as leads appear or agentRunning flips to false.
+  useEffect(() => {
+    if (!agentRunning) return
+    let cancelled = false
+
+    const poll = setInterval(async () => {
+      if (cancelled) return
+      const { data } = await supabase
+        .from('leads')
+        .select('*, lead_searches(category, city, country)')
+        .eq('workspace_id', workspace.id)
+        .order('created_at', { ascending: false })
+        .limit(200)
+
+      if (cancelled || !data || data.length === 0) return
+
+      cancelled = true
+      clearInterval(poll)
+      setLeads((prev) => {
+        const existingIds = new Set(prev.map((l) => l.id))
+        const incoming = (data as LeadWithSearch[]).filter((l) => !existingIds.has(l.id))
+        return incoming.length > 0 ? [...incoming, ...prev] : prev
+      })
+      if (agentTimeoutRef.current) clearTimeout(agentTimeoutRef.current)
+      setAgentRunning(false)
+    }, 3000)
+
+    return () => { cancelled = true; clearInterval(poll) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentRunning, workspace.id])
 
   function handleNewResults(newLeads: LeadWithSearch[], limited: boolean) {
     setLeads((prev) => [...newLeads, ...prev])
     setTrialLimited(limited)
+  }
+
+  async function handleQuickSearch() {
+    setSearching(true)
+    try {
+      const res = await fetch('/api/agent/run', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Search failed')
+
+      if (data.skipped) {
+        toast.info(data.skipReason ?? 'No new leads found right now — try again later')
+      } else {
+        toast.success(`Found ${data.leadsFound} new opportunities`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Search failed')
+    } finally {
+      setSearching(false)
+    }
   }
 
   const handleEnrich = useCallback(async (leadId: string) => {
@@ -674,7 +817,28 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
     else { setSortKey(key); setSortDir('desc') }
   }
 
-  const sorted = [...leads].sort((a, b) => {
+  const tabCounts = leads.reduce((acc, l) => {
+    const archived = (l as Lead & { archived_at?: string | null }).archived_at != null
+    const relevance = (l as Lead & { relevance?: string }).relevance ?? 'cold'
+    if (archived) acc.backlog++
+    else if (relevance === 'hot') acc.hot++
+    else if (relevance === 'warm') acc.warm++
+    acc.all++
+    return acc
+  }, { hot: 0, warm: 0, all: 0, backlog: 0 })
+
+  const filtered = leads.filter((l) => {
+    const archived = (l as Lead & { archived_at?: string | null }).archived_at != null
+    const relevance = (l as Lead & { relevance?: string }).relevance ?? 'cold'
+    switch (tab) {
+      case 'hot':     return !archived && relevance === 'hot'
+      case 'warm':    return !archived && relevance === 'warm'
+      case 'backlog': return archived || relevance === 'cold'
+      case 'all':     return !archived
+    }
+  })
+
+  const sorted = [...filtered].sort((a, b) => {
     const aVal = a[sortKey] ?? (sortDir === 'desc' ? -Infinity : Infinity)
     const bVal = b[sortKey] ?? (sortDir === 'desc' ? -Infinity : Infinity)
     if (typeof aVal === 'string' && typeof bVal === 'string') {
@@ -712,19 +876,46 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
           <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0, marginBottom: 4 }}>Leads</h2>
           <p style={{ fontSize: 13, color: 'var(--text-3)', margin: 0 }}>
             {leads.length > 0
-              ? `${leads.length} leads · ${credits} enrichment ${credits === 1 ? 'credit' : 'credits'} remaining`
+              ? `${leads.length} leads · Your agent finds new leads every day, you can look for new opportunities now if you can't wait`
               : 'Your agent scans Google Maps daily and surfaces the best leads for your offer'}
           </p>
         </div>
         <button
           className="btn btn-primary"
-          onClick={() => setShowSearchModal(true)}
+          onClick={handleQuickSearch}
+          disabled={searching}
           style={{ gap: 6 }}
         >
-          <Icon d={Icons.search} size={14} />
-          New search
+          {searching ? (
+            <><span className="spinner" /> Searching…</>
+          ) : (
+            <><Icon d={Icons.search} size={14} /> Find more opportunities now</>
+          )}
         </button>
       </div>
+
+      {/* Quick search in-progress banner */}
+      {searching && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20,
+          padding: '14px 18px', borderRadius: 12,
+          border: '1px solid var(--border)',
+          background: 'var(--bg)',
+        }}>
+          <span className="spinner" style={{
+            flexShrink: 0, width: 18, height: 18,
+            borderColor: 'rgba(0,0,0,0.12)', borderTopColor: 'var(--text-1)',
+          }} />
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>
+              Looking for new opportunities…
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              Scanning Google Maps for up to 50 leads. This takes about 20–30 seconds.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Agent running banner — shown right after onboarding while the first search is in-flight */}
       {agentRunning && (
@@ -750,18 +941,25 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
       )}
 
       {/* Agent status bar — shown after the agent has already run */}
-      {!agentRunning && agentLastRan && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20,
-          fontSize: 12, color: 'var(--text-3)',
-        }}>
-          <span style={{
-            display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-            background: 'var(--green, #2da44e)',
-          }} />
-          Agent last ran {formatRelativeTime(agentLastRan)} · runs daily at 7am UTC
-        </div>
-      )}
+      {!agentRunning && agentLastRan && (() => {
+        const ranAt = new Date(agentLastRan).getTime()
+        const leadsFound = leads.filter(l => {
+          const diff = new Date((l as Lead & { created_at?: string }).created_at ?? '').getTime() - ranAt
+          return diff >= -60 * 60 * 1000 && diff <= 2 * 60 * 60 * 1000
+        }).length
+        return (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20,
+            fontSize: 12, color: 'var(--text-3)',
+          }}>
+            <span style={{
+              display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+              background: 'var(--green, #2da44e)',
+            }} />
+            Agent last ran {formatRelativeTime(agentLastRan)} · found {leadsFound} {leadsFound === 1 ? 'lead' : 'leads'} · runs daily at 7am UTC
+          </div>
+        )
+      })()}
 
       {/* Trial limit banner */}
       {trialLimited && (
@@ -789,6 +987,43 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
         </div>
       )}
 
+      {/* Relevance tabs */}
+      <div style={{
+        display: 'flex', gap: 4, marginBottom: 16,
+        borderBottom: '1px solid var(--border)',
+      }}>
+        {([
+          { id: 'hot',     label: 'Hot',          count: tabCounts.hot },
+          { id: 'warm',    label: 'Worth a look', count: tabCounts.warm },
+          { id: 'all',     label: 'All',          count: tabCounts.all },
+          { id: 'backlog', label: 'Backlog',      count: tabCounts.backlog },
+        ] as const).map((t) => {
+          const active = tab === t.id
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                background: 'transparent', border: 'none',
+                padding: '8px 14px', cursor: 'pointer',
+                fontSize: 13, fontWeight: active ? 700 : 500,
+                color: active ? 'var(--text-1)' : 'var(--text-3)',
+                borderBottom: active ? '2px solid var(--text-1)' : '2px solid transparent',
+                marginBottom: -1,
+              }}
+            >
+              {t.label}
+              <span style={{
+                marginLeft: 6, fontSize: 11, padding: '1px 7px', borderRadius: 999,
+                background: active ? 'var(--text-1)' : 'var(--border)',
+                color: active ? '#fff' : 'var(--text-3)',
+                fontWeight: 600,
+              }}>{t.count}</span>
+            </button>
+          )
+        })}
+      </div>
+
       {/* Leads table */}
       {sorted.length > 0 ? (
         <div className="card" style={{ overflow: 'hidden' }}>
@@ -797,7 +1032,7 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
                   <SortTh label="Business" k="name" />
-                  <StaticTh label="Search" />
+                  <SortTh label="Intent" k="intent_score" />
                   <SortTh label="Surface" k="surface_score" />
                   <SortTh label="Opportunity" k="opportunity_score" />
                   <SortTh label="Rating" k="rating" />
@@ -810,6 +1045,9 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
                 {sorted.map((lead, i) => {
                   const label = searchLabel(lead)
                   const isSelected = selectedLead?.id === lead.id
+                  const relevance = (lead as Lead & { relevance?: string }).relevance
+                  const intentScore = (lead as Lead & { intent_score?: number | null }).intent_score
+                  const leadSignals = signalsByLead[lead.id]
                   return (
                     <tr
                       key={lead.id}
@@ -824,9 +1062,10 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
                       onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
                     >
                       {/* Business */}
-                      <td style={{ padding: '12px 12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <td style={{ padding: '12px 12px', maxWidth: 320 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 600, fontSize: 13 }}>{lead.name ?? '—'}</span>
+                          <RelevancePill relevance={relevance} />
                           {isNewToday(lead) && (
                             <span style={{
                               fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 20,
@@ -837,19 +1076,15 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
                             </span>
                           )}
                         </div>
-                        <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{lead.category ?? '—'}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>
+                          {lead.category ?? '—'}
+                          {label && <span style={{ marginLeft: 6 }}>· {label}</span>}
+                        </div>
+                        <SignalChips signals={leadSignals} />
                       </td>
-                      {/* Search label */}
+                      {/* Intent score */}
                       <td style={{ padding: '12px 12px' }}>
-                        {label ? (
-                          <span style={{
-                            display: 'inline-block', fontSize: 11.5, padding: '2px 8px',
-                            borderRadius: 20, background: 'var(--border)',
-                            color: 'var(--text-2)', fontWeight: 500, whiteSpace: 'nowrap',
-                          }}>
-                            {label}
-                          </span>
-                        ) : '—'}
+                        <ScoreBadge score={intentScore ?? null} enriched={intentScore != null && intentScore >= 60} />
                       </td>
                       {/* Surface score */}
                       <td style={{ padding: '12px 12px' }}>
@@ -913,15 +1148,25 @@ export function LeadFinderView({ workspace, initialLeads, slug }: Props) {
           border: '2px dashed var(--border)', borderRadius: 14,
         }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>📍</div>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>No leads yet</div>
-          <div style={{ fontSize: 13.5, color: 'var(--text-3)', marginBottom: 24, maxWidth: 380, lineHeight: 1.6 }}>
-            {agentRunning
-              ? 'Your agent is scanning Google Maps right now — leads will appear here in a few seconds.'
-              : 'Your agent scans Google Maps daily and surfaces the best leads for your offer. You can also kick off a manual search.'}
-          </div>
-          <button className="btn btn-primary" onClick={() => setShowSearchModal(true)} style={{ gap: 6 }}>
-            <Icon d={Icons.search} size={14} /> New search
-          </button>
+          {agentRunning ? (
+            <div style={{ fontSize: 13.5, color: 'var(--text-3)', maxWidth: 380, lineHeight: 1.6 }}>
+              Your agent is scanning Google Maps right now — leads will appear here in a few seconds.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>No leads yet</div>
+              <div style={{ fontSize: 13.5, color: 'var(--text-3)', marginBottom: 24, maxWidth: 380, lineHeight: 1.6 }}>
+                Your agent scans Google Maps daily and surfaces the best leads for your offer. Can't wait? Find new opportunities now.
+              </div>
+              <button className="btn btn-primary" onClick={handleQuickSearch} disabled={searching} style={{ gap: 6 }}>
+                {searching ? (
+                  <><span className="spinner" /> Searching…</>
+                ) : (
+                  <><Icon d={Icons.search} size={14} /> Find more opportunities now</>
+                )}
+              </button>
+            </>
+          )}
         </div>
       )}
 

@@ -8,119 +8,113 @@ type LeadWithSearch = Lead & {
   lead_searches: { category: string | null; city: string | null; country: string | null } | null
 }
 
+interface DbSignal {
+  id: string
+  lead_id: string
+  type: string
+  severity: number
+  evidence: unknown
+  detected_at: string
+}
+
 interface Props {
   leads: LeadWithSearch[]
+  signals: DbSignal[]
   slug: string
 }
 
-type SignalId =
-  | 'no_website'
-  | 'low_rating'
-  | 'few_reviews'
-  | 'recently_opened'
-  | 'no_review_reply'
-  | 'low_web_quality'
-  | 'low_seo'
-  | 'no_social'
+// ── UI metadata for every signal type produced by signal-detectors.ts ─────
 
-interface SignalDef {
-  id: SignalId
+interface SignalMeta {
   label: string
   icon: string
   bg: string
-  getTitle: (l: LeadWithSearch) => string
-  getMeta: (l: LeadWithSearch) => string
-  requiresEnrichment: boolean
+  describe: (lead: LeadWithSearch, signal: DbSignal) => string
 }
 
-const SIGNAL_DEFS: SignalDef[] = [
-  {
-    id: 'no_website',
-    label: 'No website',
-    icon: '🌐',
-    bg: '#FCEAEA',
-    getTitle: (l) => `${l.name} — No website found`,
-    getMeta: (l) => `No website · ${[l.lead_searches?.city, l.lead_searches?.country].filter(Boolean).join(', ')}`,
-    requiresEnrichment: false,
-  },
-  {
-    id: 'low_rating',
-    label: 'Rating below 4 ⭐',
-    icon: '⭐',
-    bg: '#FEF6E7',
-    getTitle: (l) => `${l.name} — Rated ${l.rating}/5`,
-    getMeta: (l) => `Low rating · ${l.review_count ?? 0} reviews · ${l.category ?? ''}`,
-    requiresEnrichment: false,
-  },
-  {
-    id: 'few_reviews',
-    label: 'Low review count 💬',
-    icon: '💬',
-    bg: '#FEF6E7',
-    getTitle: (l) => `${l.name} — Only ${l.review_count ?? 0} reviews`,
-    getMeta: (l) => `Low digital maturity · ${l.category ?? ''} · ${l.lead_searches?.city ?? ''}`,
-    requiresEnrichment: false,
-  },
-  {
-    id: 'recently_opened',
-    label: 'Recently opened 🆕',
-    icon: '🆕',
-    bg: '#EBF5F0',
-    getTitle: (l) => `${l.name} — Appears to be a new business`,
-    getMeta: (l) => `New business · ${l.category ?? ''} · ${l.lead_searches?.city ?? ''}`,
-    requiresEnrichment: false,
-  },
-  {
-    id: 'no_review_reply',
-    label: 'Not replying to reviews 🔇',
-    icon: '🔇',
-    bg: '#EBF1FA',
-    getTitle: (l) => `${l.name} — Not responding to Google reviews`,
-    getMeta: (l) => `Review management · ${l.owner_response_rate ?? 0}% response rate`,
-    requiresEnrichment: true,
-  },
-  {
-    id: 'low_web_quality',
-    label: 'Low quality website 🖥️',
-    icon: '🖥️',
-    bg: '#FCEAEA',
-    getTitle: (l) => `${l.name} — Website quality ${l.website_quality_score ?? '?'}/100`,
-    getMeta: (l) => `Website redesign opportunity · ${l.category ?? ''}`,
-    requiresEnrichment: true,
-  },
-  {
-    id: 'low_seo',
-    label: 'Poor SEO signals 🔍',
-    icon: '🔍',
-    bg: '#FCEAEA',
-    getTitle: (l) => `${l.name} — Missing key SEO elements`,
-    getMeta: (l) => `Local SEO opportunity · ${l.category ?? ''} · ${l.lead_searches?.city ?? ''}`,
-    requiresEnrichment: true,
-  },
-  {
-    id: 'no_social',
-    label: 'No social presence 📱',
-    icon: '📱',
-    bg: '#F3F2EF',
-    getTitle: (l) => `${l.name} — No social media profiles`,
-    getMeta: (l) => `Social media opportunity · ${l.category ?? ''}`,
-    requiresEnrichment: true,
-  },
-]
+function ev(s: DbSignal): Record<string, unknown> {
+  return (s.evidence as Record<string, unknown> | null) ?? {}
+}
 
-function getLeadSignals(lead: LeadWithSearch): SignalId[] {
-  const signals: SignalId[] = []
-  if (!lead.website) signals.push('no_website')
-  if (lead.rating !== null && lead.rating < 4) signals.push('low_rating')
-  if (lead.review_count !== null && lead.review_count < 20) signals.push('few_reviews')
-  if (lead.review_count !== null && lead.review_count < 10) signals.push('recently_opened')
-  if (lead.enrichment_status === 'done') {
-    if (!lead.has_social_presence) signals.push('no_social')
-    if (lead.owner_response_rate !== null && lead.owner_response_rate < 20) signals.push('no_review_reply')
-    if (lead.website_quality_score !== null && lead.website_quality_score < 50) signals.push('low_web_quality')
-    if (lead.website_quality_score !== null && lead.website_quality_score < 35) signals.push('low_seo')
+const SIGNAL_META: Record<string, SignalMeta> = {
+  no_website: {
+    label: 'No website', icon: '🌐', bg: '#FCEAEA',
+    describe: (l) => `${l.name ?? 'This lead'} doesn't have a website yet — full web build opportunity.`,
+  },
+  low_rating: {
+    label: 'Low rating', icon: '⭐', bg: '#FEF6E7',
+    describe: (l, s) => {
+      const r = (ev(s).rating as number | undefined) ?? l.rating ?? 0
+      return `Rated ${r}/5 on Google — reputation management opportunity.`
+    },
+  },
+  negative_review_streak: {
+    label: 'Negative reviews streak', icon: '📉', bg: '#FCEAEA',
+    describe: (_l, s) => {
+      const e = ev(s)
+      const n = (e.negative_count as number | undefined) ?? 0
+      const w = (e.window as number | undefined) ?? 5
+      return `${n} of the last ${w} reviews were negative. They need help now.`
+    },
+  },
+  review_velocity_drop: {
+    label: 'Reviews stopped', icon: '🔕', bg: '#EBF1FA',
+    describe: (_l, s) => {
+      const days = (ev(s).days_silent as number | undefined) ?? 0
+      return `No new reviews in ${days} days — visibility is dropping.`
+    },
+  },
+  review_velocity_spike: {
+    label: 'Reviews surging', icon: '📈', bg: '#EBF5F0',
+    describe: (_l, s) => {
+      const n = (ev(s).recent_30d as number | undefined) ?? 0
+      return `${n} new reviews in the last 30 days — momentum and openness to spend.`
+    },
+  },
+  recently_opened: {
+    label: 'Recently opened', icon: '🆕', bg: '#EBF5F0',
+    describe: (_l, s) => {
+      const months = (ev(s).age_months as number | undefined) ?? 0
+      return `Business opened ~${Math.round(months)} months ago — needs the full stack.`
+    },
+  },
+  owner_unresponsive: {
+    label: 'Owner not replying', icon: '🔇', bg: '#EBF1FA',
+    describe: (_l, s) => {
+      const rate = (ev(s).reply_rate as number | undefined) ?? 0
+      return `Owner replies to only ${Math.round(rate * 100)}% of reviews — review management gap.`
+    },
+  },
+  no_tracking_pixel: {
+    label: 'No ads tracking', icon: '📊', bg: '#FEF6E7',
+    describe: () => 'No GA or Pixel detected — running ads blind, perfect upsell.',
+  },
+  outdated_stack: {
+    label: 'Outdated website', icon: '🖥️', bg: '#FCEAEA',
+    describe: (_l, s) => {
+      const tech = (ev(s).tech_hints as string[] | undefined)?.join(', ') ?? 'legacy stack'
+      return `Built on ${tech} — redesign opportunity.`
+    },
+  },
+  no_booking_on_needs_booking: {
+    label: 'No booking system', icon: '📅', bg: '#FCEAEA',
+    describe: (l) => `${l.category ?? 'This business'} typically needs online booking — currently missing.`,
+  },
+  phone_only: {
+    label: 'Phone-only', icon: '☎️', bg: '#FEF6E7',
+    describe: () => 'No website, only a phone — AI receptionist or web build opportunity.',
+  },
+  no_social: {
+    label: 'No social presence', icon: '📱', bg: '#F3F2EF',
+    describe: () => 'No social channels detected on the website — full content opportunity.',
+  },
+}
+
+function fallbackMeta(type: string): SignalMeta {
+  return {
+    label: type, icon: '⚪', bg: '#F3F2EF',
+    describe: () => 'Detected signal',
   }
-  return signals
 }
 
 function timeAgo(date: string) {
@@ -130,34 +124,35 @@ function timeAgo(date: string) {
   return `${Math.floor(secs / 86400)}d ago`
 }
 
-export function SignalsView({ leads, slug }: Props) {
-  const [activeFilter, setActiveFilter] = useState<SignalId | 'all'>('all')
+export function SignalsView({ leads, signals, slug }: Props) {
+  const [activeFilter, setActiveFilter] = useState<string>('all')
 
-  // Explode: one row per (lead × signal)
-  const rows = leads.flatMap((lead) =>
-    getLeadSignals(lead).map((signalId) => ({ lead, signalId }))
-  )
+  const leadsById = new Map(leads.map((l) => [l.id, l]))
 
-  const counts: Partial<Record<SignalId | 'all', number>> = { all: rows.length }
-  for (const def of SIGNAL_DEFS) {
-    counts[def.id] = rows.filter((r) => r.signalId === def.id).length
-  }
+  // Pair each signal with its lead (drop signals whose lead is archived /
+  // not in the current page result).
+  const rows = signals
+    .map((s) => {
+      const lead = leadsById.get(s.lead_id)
+      return lead ? { lead, signal: s } : null
+    })
+    .filter((r): r is { lead: LeadWithSearch; signal: DbSignal } => r !== null)
+
+  // Filter buttons reflect what's actually in the dataset
+  const counts: Record<string, number> = { all: rows.length }
+  for (const r of rows) counts[r.signal.type] = (counts[r.signal.type] ?? 0) + 1
 
   const filtered = activeFilter === 'all'
     ? rows
-    : rows.filter((r) => r.signalId === activeFilter)
+    : rows.filter((r) => r.signal.type === activeFilter)
 
-  const filters: Array<{ id: SignalId | 'all'; label: string }> = [
+  const filters: Array<{ id: string; label: string }> = [
     { id: 'all', label: 'All' },
-    ...SIGNAL_DEFS
-      .filter((d) => (counts[d.id] ?? 0) > 0)
-      .map((d) => ({ id: d.id, label: d.label })),
+    ...Object.keys(counts)
+      .filter((k) => k !== 'all')
+      .sort((a, b) => counts[b] - counts[a])
+      .map((id) => ({ id, label: (SIGNAL_META[id] ?? fallbackMeta(id)).label })),
   ]
-
-  const SIGNAL_DEF_MAP = Object.fromEntries(SIGNAL_DEFS.map((d) => [d.id, d])) as Record<SignalId, SignalDef>
-
-  const unenrichedCount = leads.filter((l) => l.enrichment_status === 'none').length
-  const lockedDefs = SIGNAL_DEFS.filter((d) => d.requiresEnrichment && (counts[d.id] ?? 0) === 0)
 
   return (
     <div className="page-enter">
@@ -172,36 +167,7 @@ export function SignalsView({ leads, slug }: Props) {
             {counts[f.id] ? ` (${counts[f.id]})` : ''}
           </button>
         ))}
-        <div style={{ marginLeft: 'auto' }}>
-          {unenrichedCount > 0 && (
-            <Link href={`/${slug}/leads`} className="btn btn-secondary btn-sm">
-              ⚡ Enrich more leads
-            </Link>
-          )}
-        </div>
       </div>
-
-      {/* Enrichment nudge */}
-      {unenrichedCount > 0 && leads.length > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 12,
-          padding: '12px 16px', borderRadius: 10, marginBottom: 16,
-          background: 'var(--amber-bg, #FEF6E7)', border: '1px solid #f5c842',
-        }}>
-          <span style={{ fontSize: 16 }}>⚡</span>
-          <div style={{ flex: 1, fontSize: 13 }}>
-            <strong>{unenrichedCount} leads</strong> haven&rsquo;t been enriched yet — enriching them unlocks{' '}
-            <strong>4 more signal types</strong> (web quality, SEO, social presence, review replies).
-          </div>
-          <Link href={`/${slug}/leads`} style={{
-            fontSize: 12, fontWeight: 600, color: 'var(--amber, #92580A)',
-            textDecoration: 'none', padding: '4px 12px', borderRadius: 6,
-            border: '1px solid #f5c842', background: '#fffbf0', whiteSpace: 'nowrap',
-          }}>
-            Enrich leads →
-          </Link>
-        </div>
-      )}
 
       <div className="card">
         <div className="card-body" style={{ padding: '0 20px' }}>
@@ -213,30 +179,40 @@ export function SignalsView({ leads, slug }: Props) {
               </div>
               <div style={{ fontSize: 13 }}>
                 {leads.length === 0
-                  ? 'Run a lead search first — signals are detected automatically.'
-                  : 'No leads match this signal type.'}
+                  ? 'Your agent will detect signals as it discovers leads.'
+                  : 'No signals match this filter.'}
               </div>
               {leads.length === 0 && (
                 <Link href={`/${slug}/leads`} className="btn btn-primary"
                   style={{ display: 'inline-flex', marginTop: 16, gap: 6, textDecoration: 'none' }}>
-                  Find leads →
+                  Open leads →
                 </Link>
               )}
             </div>
           ) : (
-            filtered.map(({ lead, signalId }, i) => {
-              const def = SIGNAL_DEF_MAP[signalId]
+            filtered.map(({ lead, signal }) => {
+              const meta = SIGNAL_META[signal.type] ?? fallbackMeta(signal.type)
               return (
-                <div key={`${lead.id}-${signalId}-${i}`} className="signal-item">
-                  <div className="signal-icon" style={{ background: def.bg, fontSize: 16 }}>
-                    {def.icon}
+                <div key={signal.id} className="signal-item">
+                  <div className="signal-icon" style={{ background: meta.bg, fontSize: 16 }}>
+                    {meta.icon}
                   </div>
                   <div className="signal-body">
-                    <div className="signal-title">{def.getTitle(lead)}</div>
-                    <div className="signal-meta">{def.getMeta(lead)}</div>
+                    <div className="signal-title">
+                      {lead.name ?? '—'}
+                      <span style={{
+                        marginLeft: 8, fontSize: 10.5, fontWeight: 700,
+                        padding: '1px 7px', borderRadius: 20,
+                        background: meta.bg, color: 'var(--text-2)',
+                        textTransform: 'uppercase', letterSpacing: '0.04em',
+                      }}>
+                        {meta.label}
+                      </span>
+                    </div>
+                    <div className="signal-meta">{meta.describe(lead, signal)}</div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                    <span className="signal-time">{timeAgo(lead.created_at)}</span>
+                    <span className="signal-time">{timeAgo(signal.detected_at)}</span>
                     <Link href={`/${slug}/leads`} className="btn btn-secondary btn-sm">
                       View lead →
                     </Link>
@@ -247,21 +223,6 @@ export function SignalsView({ leads, slug }: Props) {
           )}
         </div>
       </div>
-
-      {/* Locked signals legend */}
-      {leads.length > 0 && lockedDefs.length > 0 && (
-        <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Locked — enrich leads to unlock:</span>
-          {lockedDefs.map((def) => (
-            <span key={def.id} style={{
-              fontSize: 12, padding: '3px 10px', borderRadius: 20,
-              border: '1px dashed var(--border-2)', color: 'var(--text-3)',
-            }}>
-              {def.icon} {def.label}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

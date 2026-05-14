@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { useWorkspace } from '@/hooks/useWorkspace'
 
@@ -127,19 +128,31 @@ function Pill({ label, selected, onClick }: { label: string; selected: boolean; 
 
 export default function ProfilePage() {
   const workspace = useWorkspace()
+  const router = useRouter()
 
-  const [offerDescription, setOfferDescription] = useState('')
+  const [websiteUrl, setWebsiteUrl] = useState('')
   const [services, setServices] = useState<string[]>([])
   const [niches, setNiches] = useState<string[]>([])
   const [location, setLocation] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    setOfferDescription(workspace.offer_description ?? '')
+    setWebsiteUrl(workspace.brand_website_url ?? '')
     setServices((workspace.icp_services as string[] | null) ?? [])
     setNiches((workspace.icp_niches as string[] | null) ?? [])
     setLocation(workspace.icp_city ?? '')
   }, [workspace])
+
+  function isValidUrl(value: string): boolean {
+    const v = value.trim()
+    if (!v) return true
+    try {
+      const url = new URL(v)
+      return url.protocol === 'http:' || url.protocol === 'https:'
+    } catch {
+      return false
+    }
+  }
 
   function toggleService(id: string) {
     setServices((prev) =>
@@ -156,8 +169,9 @@ export default function ProfilePage() {
   const selectedServices = SERVICES.filter((s) => services.includes(s.id))
 
   async function handleSave() {
-    if (!offerDescription.trim()) {
-      toast.error('Offer description is required.')
+    const trimmedUrl = websiteUrl.trim()
+    if (trimmedUrl && !isValidUrl(trimmedUrl)) {
+      toast.error('Enter a valid website URL (https://…)')
       return
     }
 
@@ -167,8 +181,7 @@ export default function ProfilePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          offer_description: offerDescription.trim(),
-          brand_website_url: workspace.brand_website_url ?? null,
+          brand_website_url: trimmedUrl || null,
           icp_services: services,
           icp_niches: niches,
           icp_city: location.trim() || null,
@@ -178,6 +191,7 @@ export default function ProfilePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Failed to save')
       toast.success('Profile saved.')
+      router.refresh()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
@@ -196,19 +210,20 @@ export default function ProfilePage() {
         </p>
       </div>
 
-      {/* Offer description */}
+      {/* Website URL */}
       <div className="card" style={{ padding: 24, marginBottom: 12 }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Offer description</label>
-          <textarea
+          <label className="form-label">Website URL</label>
+          <input
             className="form-input"
-            value={offerDescription}
-            onChange={(e) => setOfferDescription(e.target.value)}
-            placeholder="e.g. We help local restaurants get more bookings through Google Ads and social media management."
-            style={{ height: 100, resize: 'vertical', padding: 10, lineHeight: 1.6 }}
+            type="url"
+            value={websiteUrl}
+            onChange={(e) => setWebsiteUrl(e.target.value)}
+            placeholder="https://your-agency.com"
+            autoComplete="url"
           />
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 5 }}>
-            Used by AI to score leads and write outreach emails.
+            Your agency site — used for context when scoring and reaching out to leads.
           </div>
         </div>
       </div>
@@ -334,7 +349,7 @@ export default function ProfilePage() {
         className="btn btn-primary"
         style={{ padding: '10px 24px', fontSize: 14 }}
         onClick={handleSave}
-        disabled={loading || !offerDescription.trim()}
+        disabled={loading || (Boolean(websiteUrl.trim()) && !isValidUrl(websiteUrl))}
       >
         {loading ? <><span className="spinner" /> Saving…</> : 'Save profile'}
       </button>

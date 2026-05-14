@@ -35,6 +35,14 @@ export type Database = {
           enrichment_credits: number
           agent_search_plan: Json | null
           agent_profile_hash: string | null
+          next_run_at: string | null
+          last_digest_sent_at: string | null
+          apify_spend_cents_month: number
+          apify_spend_month_key: string | null
+          timezone: string
+          tam_status: 'active' | 'fully_scanned' | 'expired'
+          onboarding_completed_at: string | null
+          last_login_at: string | null
           created_at: string
           updated_at: string
         }
@@ -63,6 +71,14 @@ export type Database = {
           enrichment_credits?: number
           agent_search_plan?: Json | null
           agent_profile_hash?: string | null
+          next_run_at?: string | null
+          last_digest_sent_at?: string | null
+          apify_spend_cents_month?: number
+          apify_spend_month_key?: string | null
+          timezone?: string
+          tam_status?: 'active' | 'fully_scanned' | 'expired'
+          onboarding_completed_at?: string | null
+          last_login_at?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -637,6 +653,11 @@ export type Database = {
           score_reasoning: string | null
           outreach_email: string | null
           discovered_at: string | null
+          relevance: 'hot' | 'warm' | 'cold'
+          intent_score: number
+          last_refreshed_at: string | null
+          outreach_email_stale: boolean
+          archived_at: string | null
           created_at: string
         }
         Insert: {
@@ -667,6 +688,11 @@ export type Database = {
           score_reasoning?: string | null
           outreach_email?: string | null
           discovered_at?: string | null
+          relevance?: 'hot' | 'warm' | 'cold'
+          intent_score?: number
+          last_refreshed_at?: string | null
+          outreach_email_stale?: boolean
+          archived_at?: string | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['leads']['Insert']>
@@ -715,6 +741,120 @@ export type Database = {
             referencedColumns: ['id']
           }
         ]
+      }
+      market_cells: {
+        Row: {
+          id: string
+          workspace_id: string
+          query: string
+          lat: number
+          lng: number
+          radius_km: number
+          priority: number
+          status: 'pending' | 'scanning' | 'partial' | 'exhausted' | 'needs_split' | 'refreshing' | 'error' | 'dead'
+          parent_cell_id: string | null
+          scans_run: number
+          scraped_count: number
+          unique_count: number
+          last_dedup_ratio: number | null
+          last_scanned_at: string | null
+          exhausted_at: string | null
+          retry_count: number
+          next_retry_at: string | null
+          last_error: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          workspace_id: string
+          query: string
+          lat: number
+          lng: number
+          radius_km: number
+          priority?: number
+          status?: 'pending' | 'scanning' | 'partial' | 'exhausted' | 'needs_split' | 'refreshing' | 'error' | 'dead'
+          parent_cell_id?: string | null
+          scans_run?: number
+          scraped_count?: number
+          unique_count?: number
+          last_dedup_ratio?: number | null
+          last_scanned_at?: string | null
+          exhausted_at?: string | null
+          retry_count?: number
+          next_retry_at?: string | null
+          last_error?: string | null
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['market_cells']['Insert']>
+        Relationships: []
+      }
+      lead_signals: {
+        Row: {
+          id: string
+          lead_id: string
+          workspace_id: string
+          type: string
+          severity: number
+          evidence: Json | null
+          detected_at: string
+        }
+        Insert: {
+          id?: string
+          lead_id: string
+          workspace_id: string
+          type: string
+          severity?: number
+          evidence?: Json | null
+          detected_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['lead_signals']['Insert']>
+        Relationships: []
+      }
+      lead_blocklist: {
+        Row: {
+          workspace_id: string
+          place_id: string
+          reason: string | null
+          created_at: string
+        }
+        Insert: {
+          workspace_id: string
+          place_id: string
+          reason?: string | null
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['lead_blocklist']['Insert']>
+        Relationships: []
+      }
+      geocode_cache: {
+        Row: {
+          query: string
+          lat: number | null
+          lng: number | null
+          admin_level: 'city' | 'region' | 'country' | 'other' | null
+          country_code: string | null
+          bbox_north: number | null
+          bbox_south: number | null
+          bbox_east: number | null
+          bbox_west: number | null
+          raw: Json | null
+          cached_at: string
+        }
+        Insert: {
+          query: string
+          lat?: number | null
+          lng?: number | null
+          admin_level?: 'city' | 'region' | 'country' | 'other' | null
+          country_code?: string | null
+          bbox_north?: number | null
+          bbox_south?: number | null
+          bbox_east?: number | null
+          bbox_west?: number | null
+          raw?: Json | null
+          cached_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['geocode_cache']['Insert']>
+        Relationships: []
       }
       ai_chats: {
         Row: {
@@ -826,6 +966,14 @@ export type Database = {
       get_user_role: {
         Args: Record<PropertyKey, never>
         Returns: 'owner' | 'admin' | 'member'
+      }
+      claim_next_workspaces: {
+        Args: { p_limit: number }
+        Returns: Database['public']['Tables']['workspaces']['Row'][]
+      }
+      claim_next_cell: {
+        Args: { p_workspace_id: string }
+        Returns: Database['public']['Tables']['market_cells']['Row'][]
       }
     }
     Enums: {

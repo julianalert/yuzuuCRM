@@ -6,7 +6,7 @@ export interface WelcomeEmailParams {
 }
 
 export function welcomeEmailHtml(params: WelcomeEmailParams): string {
-  const { fullName, workspaceName, dashboardUrl } = params
+  const { fullName, dashboardUrl } = params
 
   const stepRow = (n: string, title: string, body: string, bottomPad: number) => `
   <tr>
@@ -41,32 +41,32 @@ export function welcomeEmailHtml(params: WelcomeEmailParams): string {
       </table>
     </div>
     <div style="padding:40px 36px 44px;">
-      <h1 style="font-size:22px;font-weight:700;color:#1A1916;margin:0 0 10px;line-height:1.25;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Your first leads are waiting for you</h1>
-      <p style="font-size:14px;color:#6B6860;margin:0 0 28px;line-height:1.55;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Welcome to Yuzuu, ${fullName}. <strong style="color:#1A1916;">${workspaceName}</strong> is ready — finish the quick setup below, then open your leads to see AI-scored prospects matched to your offer.</p>
+      <h1 style="font-size:24px;font-weight:700;color:#1A1916;margin:0 0 12px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Your first leads are waiting for you</h1>
+      <p style="font-size:14px;color:#6B6860;margin:0 0 28px;line-height:1.6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Hi ${fullName}, your workspace is set up and Yuzuu is already scanning Google Maps. You have hot opportunities waiting — businesses that genuinely need what you offer, ranked by buying signals.</p>
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 28px;">
         <tbody>
           ${stepRow(
             '1',
-            'Set up your workspace',
-            'Add your company name and website — we read your site to extract your brand and offer for lead scoring.',
+            'Hot opportunities scored for your offer',
+            'Every lead is ranked by how much they need exactly what you sell. No cold lists — only businesses with real buying signals matched to your services.',
             14,
           )}
           ${stepRow(
             '2',
-            'Choose what you sell',
-            'Pick your services so Yuzuu only surfaces businesses that actually need what you offer.',
+            'Instant outreach, ready to send',
+            'Enrich any lead to unlock a personalised cold email written by AI, tailored to their website, reviews, and your offer.',
             14,
           )}
           ${stepRow(
             '3',
-            'Define your market',
-            'Select business types and a location, then we scan the market and rank leads for you.',
+            'New leads, every single day',
+            'Your agent scans Google Maps daily and surfaces fresh prospects automatically. No manual prospecting, no wasted time.',
             0,
           )}
         </tbody>
       </table>
       <a href="${dashboardUrl}" style="display:inline-block;background:#1A1916;color:white;padding:13px 26px;border-radius:8px;text-decoration:none;font-weight:500;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-        View your leads →
+        View my leads →
       </a>
     </div>
     <div style="padding:24px 36px 32px;border-top:1px solid #E8E6E1;font-size:12px;color:#A8A49C;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
