@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { trackLeadSearchCompleted, trackLeadViewed } from '@/lib/analytics/mixpanel-events'
 import { Icon, Icons } from '@/components/shared/Icon'
+import { SnapshotReport, type SnapshotReportBranding } from '@/components/reports/SnapshotReport'
+import type { SnapshotPayload } from '@/lib/agent/snapshot-report'
 import type { Workspace, Lead } from '@/lib/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -62,6 +64,75 @@ function SignalChips({ signals }: { signals: SignalChip[] | undefined }) {
         <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>+{signals.length - top.length}</span>
       )}
     </div>
+  )
+}
+
+/**
+ * Surfaces the "this prospect already has an agency" verdict. Distinct
+ * color (muted gray) from the positive-signal chips so it reads as a
+ * caveat, not an attribute.
+ */
+function AgencyChip({
+  confidence,
+  size = 'sm',
+}: { confidence: 'none' | 'low' | 'medium' | 'high' | null | undefined; size?: 'sm' | 'md' }) {
+  if (!confidence || confidence === 'none' || confidence === 'low') return null
+  const isHigh = confidence === 'high'
+  const fontSize = size === 'md' ? 11 : 10.5
+  return (
+    <span
+      title={isHigh ? 'Likely has a marketing agency already' : 'Possibly has a marketing agency'}
+      style={{
+        fontSize, fontWeight: 600, padding: '2px 7px', borderRadius: 999,
+        background: isHigh ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.05)',
+        color: 'var(--text-3)', letterSpacing: '0.02em',
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+      }}
+    >
+      <span style={{ fontSize: fontSize - 1, opacity: 0.6 }}>⚐</span>
+      {isHigh ? 'Has agency' : 'Maybe has agency'}
+    </span>
+  )
+}
+
+/** Owner email status pill (valid → green, risky → yellow, invalid → red). */
+function EmailStatusPill({ status }: { status: string | null | undefined }) {
+  if (!status || status === 'unknown') return null
+  const styles: Record<string, { bg: string; color: string; label: string }> = {
+    valid:        { bg: 'rgba(45,164,78,0.14)', color: '#1a7a3a', label: 'Verified' },
+    risky:        { bg: 'rgba(245,200,66,0.22)', color: '#92660a', label: 'Risky' },
+    invalid:      { bg: 'rgba(229,83,75,0.14)', color: '#a83a35', label: 'Invalid' },
+    unverifiable: { bg: 'rgba(0,0,0,0.06)',      color: 'var(--text-3)', label: 'Unverifiable' },
+  }
+  const s = styles[status] ?? styles.unverifiable
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 999,
+      background: s.bg, color: s.color, letterSpacing: '0.04em', textTransform: 'uppercase',
+    }}>{s.label}</span>
+  )
+}
+
+/** Tiny owner-email icon used in the lead-row "actionable now" column. */
+function OwnerEmailIndicator({
+  email, status,
+}: { email: string | null | undefined; status: string | null | undefined }) {
+  if (!email) return null
+  const color = status === 'valid'
+    ? 'var(--green, #2da44e)'
+    : status === 'risky'
+      ? '#b08200'
+      : status === 'invalid'
+        ? 'var(--red, #e5534b)'
+        : 'var(--text-3)'
+  return (
+    <span
+      title={`Owner contact: ${email}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color, fontSize: 11 }}
+    >
+      <Icon d={Icons.mail} size={11} />
+      <span style={{ fontWeight: 600 }}>·</span>
+    </span>
   )
 }
 
@@ -304,12 +375,14 @@ function SearchModal({
 
 function LeadProfile({
   lead,
+  workspace,
   onClose,
   onEnrich,
   credits,
   slug,
 }: {
   lead: LeadWithSearch
+  workspace: Workspace
   onClose: () => void
   onEnrich: (leadId: string) => Promise<void>
   credits: number
@@ -356,8 +429,12 @@ function LeadProfile({
         position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1,
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3, wordBreak: 'break-word' }}>
-            {lead.name}
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3, wordBreak: 'break-word', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span>{lead.name}</span>
+            <AgencyChip
+              size="md"
+              confidence={(lead as Lead & { existing_agency_confidence?: 'none'|'low'|'medium'|'high' }).existing_agency_confidence}
+            />
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <span>{lead.category}</span>
@@ -421,6 +498,55 @@ function LeadProfile({
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Decision-maker contact (Tier 1) */}
+        {(lead.owner_email || lead.owner_name || lead.owner_linkedin_url) && (
+          <div style={{ marginBottom: 18 }}>
+            <SectionLabel label="Decision-maker" />
+            <div className="card" style={{ padding: 14, background: 'var(--bg)' }}>
+              {lead.owner_name && (
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{lead.owner_name}</div>
+              )}
+              {lead.owner_email && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 6 }}>
+                  <Icon d={Icons.mail} size={13} style={{ color: 'var(--text-3)' }} />
+                  <span style={{ fontFamily: 'ui-monospace, monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {lead.owner_email}
+                  </span>
+                  <EmailStatusPill status={lead.owner_email_status} />
+                  {lead.owner_email_status !== 'invalid' && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 11, padding: '2px 6px' }}
+                      onClick={() => {
+                        navigator.clipboard.writeText(lead.owner_email!)
+                        toast.success('Copied')
+                      }}
+                    >Copy</button>
+                  )}
+                </div>
+              )}
+              {lead.owner_linkedin_url && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 2 }}>
+                  <Icon d={Icons.integrations} size={13} style={{ color: 'var(--text-3)' }} />
+                  <a
+                    href={lead.owner_linkedin_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--accent)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {lead.owner_linkedin_url.replace(/^https?:\/\//, '')}
+                  </a>
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                {lead.contact_source === 'hunter' ? 'Sourced via Hunter' :
+                 lead.contact_source === 'website_scrape' ? 'Sourced from website' :
+                 lead.contact_source === 'manual' ? 'Added manually' : ''}
+              </div>
+            </div>
           </div>
         )}
 
@@ -513,6 +639,11 @@ function LeadProfile({
           </div>
         )}
 
+        {/* Snapshot report (Tier 1) — auto-generated for hot leads */}
+        {(lead as Lead & { relevance?: string }).relevance === 'hot' && (
+          <SnapshotReportSection lead={lead} workspace={workspace} />
+        )}
+
         {/* Enrich CTA */}
         {!isEnriched && !isLoading && (
           <div style={{ padding: 16, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
@@ -548,6 +679,210 @@ function LeadProfile({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Snapshot report (inline section in LeadProfile) ──────────────────────────
+
+interface LeadReportRow {
+  id: string
+  public_token: string
+  payload: SnapshotPayload
+  generated_at: string
+  is_stale: boolean
+}
+
+function SnapshotReportSection({
+  lead,
+  workspace,
+}: {
+  lead: LeadWithSearch
+  workspace: Workspace
+}) {
+  const supabaseRef = useRef(createClient())
+  const supabase = supabaseRef.current
+  const [report, setReport] = useState<LeadReportRow | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [regenerating, setRegenerating] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  // Fetch the active report for this lead. Re-runs when the selected lead
+  // changes so navigating between leads always shows the right report.
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setReport(null)
+    supabase
+      .from('lead_reports')
+      .select('id, public_token, payload, generated_at, is_stale')
+      .eq('lead_id', lead.id)
+      .eq('is_stale', false)
+      .order('generated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return
+        if (data) {
+          setReport({
+            id: data.id,
+            public_token: data.public_token,
+            payload: data.payload as unknown as SnapshotPayload,
+            generated_at: data.generated_at,
+            is_stale: data.is_stale,
+          })
+        }
+        setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [lead.id, supabase])
+
+  // Live-update when the runner posts a new report for this lead.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`lead-report-${lead.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'lead_reports', filter: `lead_id=eq.${lead.id}` },
+        (payload) => {
+          const row = payload.new as LeadReportRow
+          if (!row.is_stale) setReport(row)
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [lead.id, supabase])
+
+  async function handleRegenerate() {
+    setRegenerating(true)
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/report/regenerate`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error ?? 'Could not regenerate report')
+        return
+      }
+      // The realtime listener will pick up the new row, but fetch right
+      // away in case Realtime isn't configured.
+      const { data: fresh } = await supabase
+        .from('lead_reports')
+        .select('id, public_token, payload, generated_at, is_stale')
+        .eq('lead_id', lead.id)
+        .eq('is_stale', false)
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (fresh) {
+        setReport({
+          id: fresh.id,
+          public_token: fresh.public_token,
+          payload: fresh.payload as unknown as SnapshotPayload,
+          generated_at: fresh.generated_at,
+          is_stale: fresh.is_stale,
+        })
+      }
+      toast.success('Snapshot regenerated')
+    } catch {
+      toast.error('Could not regenerate report')
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
+  function handleCopyLink() {
+    if (!report) return
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://app.yuzuu.co'
+    navigator.clipboard.writeText(`${origin}/r/${report.public_token}`)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  if (loading) {
+    return (
+      <div style={{ marginBottom: 18 }}>
+        <SectionLabel label="Snapshot report" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-3)' }}>
+          <span className="spinner" style={{ width: 12, height: 12 }} /> Loading snapshot…
+        </div>
+      </div>
+    )
+  }
+
+  if (!report) {
+    return (
+      <div style={{ marginBottom: 18 }}>
+        <SectionLabel label="Snapshot report" />
+        <div className="card" style={{ padding: 14, background: 'var(--bg)', fontSize: 12.5, color: 'var(--text-3)', lineHeight: 1.6 }}>
+          We&apos;ll auto-generate a one-page pitch report as soon as this lead is processed.
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ marginLeft: 8, fontSize: 12, padding: '3px 8px' }}
+            onClick={handleRegenerate}
+            disabled={regenerating}
+          >
+            {regenerating ? <><span className="spinner" /> Generating…</> : 'Generate now'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const branding: SnapshotReportBranding = {
+    agencyName: workspace.name ?? 'Agency',
+    agencyLogoUrl: workspace.logo_url ?? null,
+    accent: '#1A1916',
+    hideYuzuuBranding: workspace.plan === 'enterprise',
+  }
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <SectionLabel label="Snapshot report" />
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+        <button onClick={handleCopyLink} className="btn btn-ghost btn-sm" style={{ fontSize: 12, padding: '4px 10px', gap: 4 }}>
+          <Icon d={copied ? Icons.check : Icons.search} size={12} />
+          {copied ? 'Link copied!' : 'Copy share link'}
+        </button>
+        <a
+          href={`/api/leads/${lead.id}/report/pdf`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-ghost btn-sm"
+          style={{ fontSize: 12, padding: '4px 10px', gap: 4 }}
+        >
+          <Icon d={Icons.search} size={12} /> Download PDF
+        </a>
+        <button
+          onClick={handleRegenerate}
+          className="btn btn-ghost btn-sm"
+          style={{ fontSize: 12, padding: '4px 10px', gap: 4 }}
+          disabled={regenerating}
+        >
+          {regenerating ? <><span className="spinner" style={{ width: 11, height: 11 }} /> Regenerating…</> : <>↻ Regenerate</>}
+        </button>
+      </div>
+      <div style={{ borderRadius: 12, overflow: 'hidden', background: '#fff', maxHeight: 460, overflowY: 'auto' }}>
+        <SnapshotReport
+          payload={report.payload}
+          branding={branding}
+          lead={{
+            name: lead.name,
+            category: lead.category,
+            address: lead.address,
+            website: lead.website,
+            rating: lead.rating,
+            review_count: lead.review_count,
+          }}
+          generatedAt={report.generated_at}
+        />
+      </div>
+    </div>
+  )
+}
+
+function SectionLabel({ label }: { label: string }) {
+  return (
+    <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
+      {label}
     </div>
   )
 }
@@ -1066,6 +1401,10 @@ export function LeadFinderView({ workspace, initialLeads, initialSignalsByLead, 
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 600, fontSize: 13 }}>{lead.name ?? '—'}</span>
                           <RelevancePill relevance={relevance} />
+                          <AgencyChip
+                            confidence={(lead as Lead & { existing_agency_confidence?: 'none'|'low'|'medium'|'high' }).existing_agency_confidence}
+                          />
+                          <OwnerEmailIndicator email={lead.owner_email} status={lead.owner_email_status} />
                           {isNewToday(lead) && (
                             <span style={{
                               fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 20,
@@ -1193,6 +1532,7 @@ export function LeadFinderView({ workspace, initialLeads, initialSignalsByLead, 
         />
         <LeadProfile
           lead={selectedLead}
+          workspace={workspace}
           onClose={() => setSelectedLead(null)}
           onEnrich={handleEnrich}
           credits={credits}

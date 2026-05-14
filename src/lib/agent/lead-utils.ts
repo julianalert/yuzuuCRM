@@ -46,6 +46,13 @@ export interface WebsiteScrapeResult {
   hasBooking: boolean
   techHints: string[]
   bodyExcerpt: string
+  /**
+   * Raw HTML (capped at 250KB to bound memory). Kept for downstream
+   * agency-detector + contact-enrichment passes so they don't re-fetch.
+   */
+  html: string
+  /** Effective URL after redirects, used to derive the canonical domain. */
+  finalUrl: string | null
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -143,11 +150,14 @@ export async function scrapeWebsite(url: string): Promise<WebsiteScrapeResult> {
       hasBooking,
       techHints,
       bodyExcerpt,
+      html: html.slice(0, 250_000),
+      finalUrl: res.url || null,
     }
   } catch {
     return {
       qualityScore: 10, hasSocialPresence: false, socialLinks: {},
       hasBooking: false, techHints: [], bodyExcerpt: '',
+      html: '', finalUrl: null,
     }
   }
 }

@@ -40,6 +40,9 @@ import { detectAllSignals } from './signal-detectors'
 import { computeRelevance } from './relevance'
 import { enrichLead } from './enrich'
 import { timezoneForCountry } from './geo-data/top-cities'
+import { detectExistingAgency, domainFromUrl, type AgencyDetectionResult } from './agency-detector'
+import { enrichLeadContact } from './contact-enrichment'
+import { orchestrateSnapshotReport } from './snapshot-orchestrator'
 import type { Database, Json } from '@/lib/types/database'
 
 type Workspace = Database['public']['Tables']['workspaces']['Row']
@@ -368,6 +371,10 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
       // ── Detectors + relevance ───────────────────────────────────────────
       const hotLeads: Array<{ leadId: string; place: ApifyPlace; lead: typeof insertedLeads[number] }> = []
 
+      // Cache scrapes inside this slice so we don't fetch the same site twice
+      // when a lead transitions from "scored" to "enriched".
+      const scrapeCache = new Map<string, Awaited<ReturnType<typeof scrapeWebsite>>>()
+
       for (const lead of insertedLeads ?? []) {
         const place = newPlaces.find((p) => p.placeId === lead.place_id)
         if (!place) continue
@@ -376,7 +383,27 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
         // Skip the network call for "weak" looking leads to save time.
         let scrape = null
         const shouldScrape = Boolean(place.website) && (lead.surface_score ?? 0) >= 50
-        if (shouldScrape) scrape = await scrapeWebsite(place.website!)
+        if (shouldScrape) {
+          scrape = await scrapeWebsite(place.website!)
+          scrapeCache.set(lead.id, scrape)
+        }
+
+        // ── Agency detection ────────────────────────────────────────────
+        // Pure regex, fires on the HTML we already fetched — zero extra cost.
+        // Strong evidence flips the lead to cold regardless of other signals.
+        let agency: AgencyDetectionResult = { hasAgency: false, confidence: 'none', evidence: [] }
+        const domain = domainFromUrl(place.website ?? null)
+        if (scrape?.html && domain) {
+          try {
+            agency = detectExistingAgency({
+              html: scrape.html,
+              domain,
+              techHints: scrape.techHints,
+            })
+          } catch (err) {
+            console.warn(`[agent] agency-detector failed for lead=${lead.id}:`, err)
+          }
+        }
 
         const signals = detectAllSignals({
           place: {
@@ -393,6 +420,7 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
           signals,
           workspaceServices: workspace.icp_services,
           surfaceScore: lead.surface_score,
+          agencyConfidence: agency.confidence,
         })
 
         if (signals.length > 0) {
@@ -418,6 +446,11 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
             website_quality_score: scrape?.qualityScore ?? null,
             has_social_presence:   scrape?.hasSocialPresence ?? null,
             social_links: scrape && Object.keys(scrape.socialLinks).length > 0 ? scrape.socialLinks : null,
+            has_existing_agency:        agency.hasAgency,
+            existing_agency_confidence: agency.confidence,
+            existing_agency_evidence:   agency.evidence.length > 0
+                                          ? (agency.evidence as unknown as Json)
+                                          : null,
           })
           .eq('id', lead.id)
 
@@ -428,8 +461,19 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
       }
 
       // ── Enrichment (hot only, gpt-4o-mini) ──────────────────────────────
+      // Refresh workspace budgets once before the loop so each hot lead can
+      // share a single in-memory budget snapshot.
+      const monthKey = new Date().toISOString().slice(0, 7)
+      let contactSpend = workspace.contact_spend_month_key === monthKey
+        ? workspace.contact_spend_cents_month : 0
+      const contactCap = limits.monthlyContactLookupsCap * 4   // 4¢/lookup, cap is # of lookups
+
       let creditsAvailable = workspace.enrichment_credits ?? 0
-      for (const { leadId, place, lead } of hotLeads) {
+      // Safety net: never enrich more than 10 leads per slice (planned cap)
+      const HOT_ENRICHMENT_CAP_PER_SLICE = 10
+      const hotsToProcess = hotLeads.slice(0, HOT_ENRICHMENT_CAP_PER_SLICE)
+
+      for (const { leadId, place, lead } of hotsToProcess) {
         if (creditsAvailable <= 0) break
         try {
           // Decrement first to claim the credit
@@ -445,9 +489,8 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
 
           await supabase.from('leads').update({ enrichment_status: 'loading' }).eq('id', leadId)
 
-          const scrape = place.website
-            ? await scrapeWebsite(place.website).catch(() => null)
-            : null
+          const scrape = scrapeCache.get(leadId)
+            ?? (place.website ? await scrapeWebsite(place.website).catch(() => null) : null)
 
           const signalsForPrompt = detectAllSignals({
             place: {
@@ -459,6 +502,44 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
             websiteScrape: scrape,
             hasBookingFromMaps: placeHasBookingFromMaps(place),
           })
+
+          // ── Contact enrichment (free scrape + Hunter fallback) ─────────
+          // Wrapped in its own try/catch so a Hunter outage can never block
+          // outreach-email enrichment for this lead.
+          try {
+            const availableHunterBudget = Math.max(0, contactCap - contactSpend)
+            const enrichResult = await enrichLeadContact({
+              websiteHtml: scrape?.html ?? null,
+              websiteUrl:  place.website ?? null,
+              availableHunterBudgetCents: availableHunterBudget,
+            })
+            const c = enrichResult.contact
+            if (c.email || c.name || c.linkedinUrl) {
+              await supabase
+                .from('leads')
+                .update({
+                  owner_name:         c.name,
+                  owner_email:        c.email,
+                  owner_email_status: c.emailStatus,
+                  owner_linkedin_url: c.linkedinUrl,
+                  contact_source:     c.source,
+                  contact_enriched_at: new Date().toISOString(),
+                })
+                .eq('id', leadId)
+            }
+            if (enrichResult.hunterCostCents > 0) {
+              contactSpend += enrichResult.hunterCostCents
+              await supabase
+                .from('workspaces')
+                .update({
+                  contact_spend_cents_month: contactSpend,
+                  contact_spend_month_key: monthKey,
+                })
+                .eq('id', workspace.id)
+            }
+          } catch (err) {
+            console.warn(`[agent] contact-enrich failed lead=${leadId}:`, err)
+          }
 
           const result = await enrichLead({
             lead,
@@ -478,6 +559,38 @@ async function runDiscoverySlice(workspace: Workspace): Promise<SliceResult> {
             outreach_email_stale: false,
           }).eq('id', leadId)
           enriched++
+
+          // ── Snapshot report (gpt-4o-mini, gated by monthly report cap) ─
+          // Wrapped in try/catch — a snapshot failure must not poison the
+          // rest of the slice. Re-fetch the lead so we pass the most recent
+          // values (esp. intent_score / owner_email).
+          try {
+            const { data: latest } = await supabase
+              .from('leads')
+              .select('id, name, category, rating, review_count, address, website, intent_score')
+              .eq('id', leadId)
+              .single()
+            if (latest) {
+              await orchestrateSnapshotReport({
+                supabase,
+                workspace: {
+                  id: workspace.id,
+                  name: workspace.name,
+                  plan: workspace.plan,
+                  offer_description: workspace.offer_description,
+                  icp_services: workspace.icp_services,
+                  icp_category: workspace.icp_category,
+                  report_spend_cents_month: workspace.report_spend_cents_month,
+                  report_spend_month_key: workspace.report_spend_month_key,
+                  agent_profile_hash: workspace.agent_profile_hash,
+                },
+                lead: latest,
+                signals: signalsForPrompt,
+              })
+            }
+          } catch (err) {
+            console.warn(`[agent] snapshot-report failed lead=${leadId}:`, err)
+          }
         } catch (err) {
           console.error(`[agent] Enrich failed lead=${leadId}:`, err)
           await supabase.from('leads').update({ enrichment_status: 'error' }).eq('id', leadId)
@@ -593,6 +706,19 @@ async function runRefreshSlice(workspace: Workspace): Promise<SliceResult> {
       if (!candidate) continue
 
       const scrape = place.website ? await scrapeWebsite(place.website) : null
+
+      // Re-evaluate agency presence on refresh — a business may have hired
+      // an agency between scans (a real reason to demote them).
+      let agency: AgencyDetectionResult = { hasAgency: false, confidence: 'none', evidence: [] }
+      const domain = domainFromUrl(place.website ?? null)
+      if (scrape?.html && domain) {
+        try {
+          agency = detectExistingAgency({ html: scrape.html, domain, techHints: scrape.techHints })
+        } catch (err) {
+          console.warn(`[agent] refresh agency-detector failed lead=${candidate.id}:`, err)
+        }
+      }
+
       const signals = detectAllSignals({
         place: {
           ...place,
@@ -615,6 +741,7 @@ async function runRefreshSlice(workspace: Workspace): Promise<SliceResult> {
         signals,
         workspaceServices: workspace.icp_services,
         surfaceScore: prev?.surface_score,
+        agencyConfidence: agency.confidence,
       })
 
       if (signals.length > 0) {
@@ -637,6 +764,11 @@ async function runRefreshSlice(workspace: Workspace): Promise<SliceResult> {
         rating: place.totalScore ?? null,
         review_count: place.reviewsCount ?? null,
         last_refreshed_at: new Date().toISOString(),
+        has_existing_agency:        agency.hasAgency,
+        existing_agency_confidence: agency.confidence,
+        existing_agency_evidence:   agency.evidence.length > 0
+                                      ? (agency.evidence as unknown as Json)
+                                      : null,
       }).eq('id', candidate.id)
 
       if (prev?.relevance !== 'hot' && r.relevance === 'hot') hotCreated++

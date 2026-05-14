@@ -29,6 +29,10 @@ export interface PlanLimits {
   enrichmentCredits: number
   /** Legacy: max leads per manual search modal. Kept for backward-compat. */
   maxLeadsPerSearch: number
+  /** Max paid contact lookups per workspace per month. */
+  monthlyContactLookupsCap: number
+  /** Max snapshot reports generated per workspace per month. */
+  monthlyReportCreditsCap: number
 }
 
 export function getPlanLimits(plan: string): PlanLimits {
@@ -42,6 +46,8 @@ export function getPlanLimits(plan: string): PlanLimits {
         trialBurstHours:         0,      // paid plans don't burst
         enrichmentCredits:       50,
         maxLeadsPerSearch:       50,
+        monthlyContactLookupsCap: 50,
+        monthlyReportCreditsCap:  30,
       }
     case 'growth':
       return {
@@ -52,6 +58,8 @@ export function getPlanLimits(plan: string): PlanLimits {
         trialBurstHours:         0,
         enrichmentCredits:       200,
         maxLeadsPerSearch:       100,
+        monthlyContactLookupsCap: 200,
+        monthlyReportCreditsCap:  100,
       }
     case 'enterprise':
       return {
@@ -62,6 +70,8 @@ export function getPlanLimits(plan: string): PlanLimits {
         trialBurstHours:         0,
         enrichmentCredits:       500,
         maxLeadsPerSearch:       200,
+        monthlyContactLookupsCap: 500,
+        monthlyReportCreditsCap:  500,
       }
     default:
       // free / trialing
@@ -74,6 +84,8 @@ export function getPlanLimits(plan: string): PlanLimits {
                                          // the 3-day trial evaluable
         enrichmentCredits:       3,
         maxLeadsPerSearch:       10,
+        monthlyContactLookupsCap: 10,
+        monthlyReportCreditsCap:  5,
       }
   }
 }

@@ -13,6 +13,17 @@ export interface DigestLead {
   signals: Array<{ label: string }>
   intentScore: number
   url: string
+  /**
+   * Public token for the auto-generated snapshot report. When present the
+   * email renders an "Open snapshot" link so the agency can preview the
+   * pitch without logging in to Yuzuu.
+   */
+  reportPublicToken?: string | null
+}
+
+export interface DailyOpportunitiesEnv {
+  /** App URL used to build snapshot share links (defaults to app.yuzuu.co). */
+  appUrl?: string
 }
 
 export interface DailyOpportunitiesParams {
@@ -22,6 +33,8 @@ export interface DailyOpportunitiesParams {
   dashboardUrl: string
   totalHotInLast24h: number
   unsubscribeUrl?: string
+  /** Base URL for /r/<token> share links. Defaults to https://app.yuzuu.co. */
+  shareBaseUrl?: string
 }
 
 function escapeHtml(s: string): string {
@@ -40,6 +53,7 @@ export function dailyOpportunitiesSubject(params: { agencyName: string; count: n
 
 export function dailyOpportunitiesHtml(params: DailyOpportunitiesParams): string {
   const { agencyName, ownerName, leads, dashboardUrl, totalHotInLast24h } = params
+  const shareBase = (params.shareBaseUrl ?? 'https://app.yuzuu.co').replace(/\/$/, '')
 
   const moreNote = totalHotInLast24h > leads.length
     ? `<p style="font-size:13px;color:#6B6860;margin:0 0 24px;line-height:1.6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
@@ -60,6 +74,10 @@ export function dailyOpportunitiesHtml(params: DailyOpportunitiesParams): string
       `<span style="display:inline-block;font-size:11px;font-weight:500;background:#FEF6E7;color:#92580A;padding:2px 8px;border-radius:99px;margin-right:6px;margin-top:4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${escapeHtml(s.label)}</span>`
     ).join('')
 
+    const snapshotLink = lead.reportPublicToken
+      ? `<a href="${shareBase}/r/${escapeHtml(lead.reportPublicToken)}" style="display:inline-block;margin-top:8px;font-size:12px;color:#1A1916;text-decoration:underline;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">Open snapshot →</a>`
+      : ''
+
     return `
     <tr>
       <td style="padding:14px 0;${isLast ? '' : 'border-bottom:1px solid #E8E6E1;'}">
@@ -69,6 +87,7 @@ export function dailyOpportunitiesHtml(params: DailyOpportunitiesParams): string
               <a href="${dashboardUrl}" style="color:#1A1916;text-decoration:none;font-size:14px;font-weight:600;line-height:1.35;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${escapeHtml(lead.name)}</a>
               <div style="margin-top:3px;">${categoryChip}${sep}${cityChip}</div>
               <div style="margin-top:2px;">${signalChips}</div>
+              ${snapshotLink}
             </td>
             <td style="vertical-align:top;text-align:right;padding:0;">
               <span style="display:inline-block;background:#1A1916;color:#fff;font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${lead.intentScore}</span>

@@ -11,14 +11,22 @@
  *  - 'hot'  when intent_score >= 60 AND at least one aligned signal exists.
  *  - 'warm' when intent_score in [30, 60) OR surface_score >= 60 even without alignment.
  *  - 'cold' otherwise.
+ *
+ * Existing-agency override (Tier 1):
+ *  - confidence === 'high'   → relevance forced to 'cold', intent_score
+ *                              halved for display honesty.
+ *  - confidence === 'medium' → relevance capped at 'warm', intent_score
+ *                              multiplied by 0.4.
+ *  - 'low' / 'none'          → no effect.
  */
 
 import type { DetectedSignal, SignalType } from './signal-detectors'
-import { alignmentScore } from './signal-detectors'
+import { alignmentScore, alignedServices } from './signal-detectors'
+import type { AgencyConfidence } from './agency-detector'
 
 const SIGNAL_WEIGHTS: Record<SignalType, number> = {
   owner_unresponsive:          0.7,
-  negative_review_streak:      1.0,   // acute, actionable now
+  negative_review_streak:      1.0,
   review_velocity_drop:        0.6,
   review_velocity_spike:       0.9,
   recently_opened:             0.85,
@@ -35,6 +43,12 @@ export interface RelevanceInput {
   signals: DetectedSignal[]
   workspaceServices: string[] | null | undefined
   surfaceScore: number | null | undefined
+  /**
+   * Confidence that this lead already has a marketing agency. When 'high'
+   * we route to cold no matter how strong other signals are; when 'medium'
+   * we cap at warm with a heavily-discounted score.
+   */
+  agencyConfidence?: AgencyConfidence
 }
 
 export interface RelevanceOutput {
@@ -44,11 +58,10 @@ export interface RelevanceOutput {
   alignedServicesByType: Record<string, string[]>
 }
 
-import { alignedServices } from './signal-detectors'
-
 export function computeRelevance(input: RelevanceInput): RelevanceOutput {
   const { signals, workspaceServices } = input
   const surfaceScore = input.surfaceScore ?? 0
+  const agencyConfidence = input.agencyConfidence ?? 'none'
 
   let total = 0
   const aligned: DetectedSignal[] = []
@@ -66,7 +79,7 @@ export function computeRelevance(input: RelevanceInput): RelevanceOutput {
 
   // Normalise: a typical hot lead has 2-3 strong aligned signals.
   // 3 signals * severity 80 * weight 1.0 = 240; that maps to ~100.
-  const intent_score = Math.min(100, Math.round(total / 2.4))
+  let intent_score = Math.min(100, Math.round(total / 2.4))
 
   let relevance: 'hot' | 'warm' | 'cold'
   if (intent_score >= 60 && aligned.length > 0) {
@@ -75,6 +88,18 @@ export function computeRelevance(input: RelevanceInput): RelevanceOutput {
     relevance = 'warm'
   } else {
     relevance = 'cold'
+  }
+
+  // ── Agency override ────────────────────────────────────────────────────────
+  if (agencyConfidence === 'high') {
+    // Has-agency confidence is high; they're not a fit. Halve the score
+    // for honesty in the UI and force cold so they don't surface in any
+    // hot/warm filter.
+    intent_score = Math.round(intent_score / 2)
+    relevance = 'cold'
+  } else if (agencyConfidence === 'medium') {
+    intent_score = Math.round(intent_score * 0.4)
+    if (relevance === 'hot') relevance = 'warm'
   }
 
   return { intent_score, relevance, aligned_signals: aligned, alignedServicesByType }

@@ -25,6 +25,8 @@ import {
   detectAllSignals,
 } from '@/lib/agent/signal-detectors'
 import { computeRelevance } from '@/lib/agent/relevance'
+import { detectExistingAgency, domainFromUrl } from '@/lib/agent/agency-detector'
+import { orchestrateSnapshotReport } from '@/lib/agent/snapshot-orchestrator'
 import type { Json } from '@/lib/types/database'
 
 export const maxDuration = 300
@@ -95,16 +97,18 @@ export async function POST(req: NextRequest) {
   if (error) return Response.json({ error: error.message }, { status: 500 })
   if (!leads || leads.length === 0) return Response.json({ processed: 0 })
 
-  // Get workspace ICP services for relevance routing.
+  // Get full workspace records for relevance + snapshot orchestration.
   const workspaceIds = Array.from(new Set(leads.map((l) => l.workspace_id)))
   const { data: workspaces } = await supabase
     .from('workspaces')
-    .select('id, icp_services')
+    .select('id, name, plan, offer_description, icp_services, icp_category, report_spend_cents_month, report_spend_month_key, agent_profile_hash')
     .in('id', workspaceIds)
-  const servicesByWs = new Map((workspaces ?? []).map((w) => [w.id, w.icp_services as string[] | null]))
+  const wsById = new Map((workspaces ?? []).map((w) => [w.id, w]))
 
   let withSignals = 0
   let hotCount = 0
+  let agencyFlagged = 0
+  let reportsGenerated = 0
 
   for (const lead of leads as DbLead[]) {
     const place = leadToPlace(lead)
@@ -113,10 +117,23 @@ export async function POST(req: NextRequest) {
       place, websiteScrape: scrape, hasBookingFromMaps: lead.has_booking_system ?? false,
     })
 
+    // Agency detection — backfill mode runs the tech-hints branch only
+    // (we don't have the HTML body for existing leads). It still catches
+    // strong "this is an agency-built shop" signals: HubSpot, Webflow,
+    // Klaviyo et al.
+    const agency = detectExistingAgency({
+      html: '',
+      domain: domainFromUrl(lead.website ?? null) ?? '',
+      techHints: lead.website_tech ?? [],
+    })
+
+    const ws = wsById.get(lead.workspace_id)
+
     const r = computeRelevance({
       signals,
-      workspaceServices: servicesByWs.get(lead.workspace_id) ?? null,
+      workspaceServices: ws?.icp_services ?? null,
       surfaceScore: lead.surface_score,
+      agencyConfidence: agency.confidence,
     })
 
     if (signals.length > 0) {
@@ -135,16 +152,68 @@ export async function POST(req: NextRequest) {
     }
 
     if (r.relevance === 'hot') hotCount++
+    if (agency.hasAgency) agencyFlagged++
 
     await supabase
       .from('leads')
-      .update({ intent_score: r.intent_score, relevance: r.relevance })
+      .update({
+        intent_score: r.intent_score,
+        relevance: r.relevance,
+        has_existing_agency: agency.hasAgency,
+        existing_agency_confidence: agency.confidence,
+        existing_agency_evidence:
+          agency.evidence.length > 0 ? (agency.evidence as unknown as Json) : null,
+      })
       .eq('id', lead.id)
+
+    // Generate a snapshot report for hot leads that don't have one yet.
+    // Respects per-workspace monthly report cap; one shared budget across
+    // all leads in a workspace.
+    if (r.relevance === 'hot' && ws) {
+      try {
+        const result = await orchestrateSnapshotReport({
+          supabase,
+          workspace: {
+            id: ws.id,
+            name: ws.name,
+            plan: ws.plan,
+            offer_description: ws.offer_description,
+            icp_services: ws.icp_services,
+            icp_category: ws.icp_category,
+            report_spend_cents_month: ws.report_spend_cents_month ?? 0,
+            report_spend_month_key: ws.report_spend_month_key ?? null,
+            agent_profile_hash: ws.agent_profile_hash,
+          },
+          lead: {
+            id: lead.id,
+            name: lead.name,
+            category: lead.category,
+            rating: lead.rating,
+            review_count: lead.review_count,
+            address: null,
+            website: lead.website,
+            intent_score: r.intent_score,
+          },
+          signals,
+        })
+        if (result.ok && result.reason !== 'fresh_report_exists') reportsGenerated++
+        // Refresh local cached spend so subsequent leads in the same
+        // workspace see the updated month-spend without re-querying.
+        if (result.ok && result.reason !== 'fresh_report_exists') {
+          const cached = wsById.get(ws.id)
+          if (cached) cached.report_spend_cents_month = (cached.report_spend_cents_month ?? 0) + 1
+        }
+      } catch (err) {
+        console.warn(`[backfill] snapshot failed lead=${lead.id}:`, err)
+      }
+    }
   }
 
   return Response.json({
     processed:  leads.length,
     withSignals,
     hotCount,
+    agencyFlagged,
+    reportsGenerated,
   })
 }

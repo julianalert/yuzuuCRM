@@ -39,6 +39,10 @@ export type Database = {
           last_digest_sent_at: string | null
           apify_spend_cents_month: number
           apify_spend_month_key: string | null
+          contact_spend_cents_month: number
+          contact_spend_month_key: string | null
+          report_spend_cents_month: number
+          report_spend_month_key: string | null
           timezone: string
           tam_status: 'active' | 'fully_scanned' | 'expired'
           onboarding_completed_at: string | null
@@ -75,6 +79,10 @@ export type Database = {
           last_digest_sent_at?: string | null
           apify_spend_cents_month?: number
           apify_spend_month_key?: string | null
+          contact_spend_cents_month?: number
+          contact_spend_month_key?: string | null
+          report_spend_cents_month?: number
+          report_spend_month_key?: string | null
           timezone?: string
           tam_status?: 'active' | 'fully_scanned' | 'expired'
           onboarding_completed_at?: string | null
@@ -658,6 +666,15 @@ export type Database = {
           last_refreshed_at: string | null
           outreach_email_stale: boolean
           archived_at: string | null
+          owner_name: string | null
+          owner_email: string | null
+          owner_email_status: 'valid' | 'risky' | 'invalid' | 'unverifiable' | 'unknown' | null
+          owner_linkedin_url: string | null
+          contact_source: 'website_scrape' | 'hunter' | 'manual' | null
+          contact_enriched_at: string | null
+          has_existing_agency: boolean
+          existing_agency_confidence: 'none' | 'low' | 'medium' | 'high'
+          existing_agency_evidence: Json | null
           created_at: string
         }
         Insert: {
@@ -693,6 +710,15 @@ export type Database = {
           last_refreshed_at?: string | null
           outreach_email_stale?: boolean
           archived_at?: string | null
+          owner_name?: string | null
+          owner_email?: string | null
+          owner_email_status?: 'valid' | 'risky' | 'invalid' | 'unverifiable' | 'unknown' | null
+          owner_linkedin_url?: string | null
+          contact_source?: 'website_scrape' | 'hunter' | 'manual' | null
+          contact_enriched_at?: string | null
+          has_existing_agency?: boolean
+          existing_agency_confidence?: 'none' | 'low' | 'medium' | 'high'
+          existing_agency_evidence?: Json | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['leads']['Insert']>
@@ -825,6 +851,47 @@ export type Database = {
         }
         Update: Partial<Database['public']['Tables']['lead_blocklist']['Insert']>
         Relationships: []
+      }
+      lead_reports: {
+        Row: {
+          id: string
+          lead_id: string
+          workspace_id: string
+          public_token: string
+          payload: Json
+          model: string
+          is_stale: boolean
+          regenerated_for_profile_hash: string | null
+          generated_at: string
+        }
+        Insert: {
+          id?: string
+          lead_id: string
+          workspace_id: string
+          public_token: string
+          payload: Json
+          model: string
+          is_stale?: boolean
+          regenerated_for_profile_hash?: string | null
+          generated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['lead_reports']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'lead_reports_lead_id_fkey'
+            columns: ['lead_id']
+            isOneToOne: false
+            referencedRelation: 'leads'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'lead_reports_workspace_id_fkey'
+            columns: ['workspace_id']
+            isOneToOne: false
+            referencedRelation: 'workspaces'
+            referencedColumns: ['id']
+          }
+        ]
       }
       geocode_cache: {
         Row: {

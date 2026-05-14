@@ -113,7 +113,20 @@ export async function sendDailyDigests(): Promise<{ sent: number; checked: numbe
       signalsByLead.set(s.lead_id, arr)
     }
 
-    const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.yuzuu.co'}/${ws.slug}/leads?tab=hot`
+    // Hydrate snapshot tokens so the email can deep-link to the public
+    // share page for each lead. Missing tokens are fine — the email just
+    // omits the "Open snapshot" link.
+    const { data: reports } = await supabase
+      .from('lead_reports')
+      .select('lead_id, public_token')
+      .in('lead_id', leadIds)
+      .eq('is_stale', false)
+
+    const tokenByLead = new Map<string, string>()
+    for (const r of reports ?? []) tokenByLead.set(r.lead_id, r.public_token)
+
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.yuzuu.co'
+    const dashboardUrl = `${appUrl}/${ws.slug}/leads?tab=hot`
 
     const digestLeads: DigestLead[] = hotLeads.slice(0, MAX_LEADS).map((l) => {
       const search = l.lead_searches as { city: string | null; country: string | null } | null
@@ -126,6 +139,7 @@ export async function sendDailyDigests(): Promise<{ sent: number; checked: numbe
                        .slice(0, 3)
                        .map((s) => ({ label: SIGNAL_LABELS[s.type] ?? s.type })),
         url:         dashboardUrl,
+        reportPublicToken: tokenByLead.get(l.id) ?? null,
       }
     })
 
@@ -151,6 +165,7 @@ export async function sendDailyDigests(): Promise<{ sent: number; checked: numbe
           leads: digestLeads,
           dashboardUrl,
           totalHotInLast24h: hotLeads.length,
+          shareBaseUrl: appUrl,
         }),
       })
 

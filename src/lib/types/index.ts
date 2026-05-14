@@ -19,6 +19,7 @@ export type MarketCell = Database['public']['Tables']['market_cells']['Row']
 export type LeadSignal = Database['public']['Tables']['lead_signals']['Row']
 export type LeadBlocklistEntry = Database['public']['Tables']['lead_blocklist']['Row']
 export type GeocodeCacheEntry = Database['public']['Tables']['geocode_cache']['Row']
+export type LeadReport = Database['public']['Tables']['lead_reports']['Row']
 
 export type LeadRelevance = Lead['relevance']
 export type MarketCellStatus = MarketCell['status']
