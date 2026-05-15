@@ -25,9 +25,8 @@ export default async function LandingPage() {
   return (
     <div className="auth-page">
       <div style={{ textAlign: 'center', maxWidth: 560, margin: '0 auto', padding: '80px 24px' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 32 }}>
-          <div className="logo-mark" style={{ width: 36, height: 36, fontSize: 16 }}>RE</div>
-          <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.4px' }}>Yuzuu</span>
+        <div style={{ display: 'inline-flex', alignItems: 'center', marginBottom: 32 }}>
+          <span className="brand-wordmark">Yuzuu</span>
         </div>
 
         <h1 style={{ fontSize: 48, fontWeight: 700, letterSpacing: '-1.5px', lineHeight: 1.1, marginBottom: 16, color: 'var(--text-1)' }}>

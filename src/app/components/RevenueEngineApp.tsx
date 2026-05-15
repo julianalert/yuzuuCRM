@@ -676,8 +676,7 @@ export default function RevenueEngineApp() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <div className="logo-mark">RE</div>
-          <span className="logo-name">Yuzuu</span>
+          <span className="brand-wordmark">Yuzuu</span>
           <span className="logo-badge">Trial</span>
         </div>
 

@@ -27,8 +27,7 @@ export default function LoginPage() {
       <div className="auth-split-form">
         <div style={{ width: '100%', maxWidth: 380 }}>
           <div className="auth-logo">
-            <div className="logo-mark">Y</div>
-            <span>Yuzuu</span>
+            <span className="brand-wordmark">Yuzuu</span>
           </div>
 
           <h1 className="auth-title">Welcome back</h1>

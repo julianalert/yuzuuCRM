@@ -120,7 +120,7 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
-        <span className="logo-name">Yuzuu</span>
+        <span className="brand-wordmark">Yuzuu</span>
         {workspace.subscription_status === 'trialing' && (
           <span className="logo-badge">Trial</span>
         )}

@@ -131,8 +131,7 @@ export default function InvitePage() {
       <div className="auth-page">
         <div className="auth-card" style={{ textAlign: 'center' }}>
           <div className="auth-logo">
-            <div className="logo-mark">Y</div>
-            <span>Yuzuu</span>
+            <span className="brand-wordmark">Yuzuu</span>
           </div>
           <div className="auth-error" style={{ marginTop: 16 }}>{error}</div>
           <Link href="/login" className="btn btn-secondary" style={{ marginTop: 16, textDecoration: 'none' }}>
@@ -149,8 +148,7 @@ export default function InvitePage() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="logo-mark">Y</div>
-          <span>Yuzuu</span>
+          <span className="brand-wordmark">Yuzuu</span>
         </div>
 
         <h1 className="auth-title">You&apos;ve been invited</h1>

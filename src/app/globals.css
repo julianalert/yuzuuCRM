@@ -3,6 +3,8 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  --font-instrument-serif: 'Instrument Serif', ui-serif, Georgia, serif;
+  --mist-950:              #1A1916;
   --bg:        #F7F6F3;
   --surface:   #FFFFFF;
   --border:    #E8E6E1;
@@ -64,23 +66,17 @@ body {
   flex-shrink: 0;
 }
 
-.logo-mark {
-  width: 26px; height: 26px;
-  background: var(--accent);
-  border-radius: 6px;
-  display: flex; align-items: center; justify-content: center;
-  color: white;
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: -0.5px;
-  flex-shrink: 0;
+.brand-wordmark {
+  font-family: var(--font-instrument-serif), ui-serif, Georgia, serif;
+  font-size: 1.5rem;
+  line-height: 1.2;
+  font-weight: 400;
+  color: var(--mist-950);
 }
 
-.logo-name {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.3px;
-  color: var(--text-1);
+html.dark .brand-wordmark,
+.dark .brand-wordmark {
+  color: #ffffff;
 }
 
 .logo-badge {
@@ -894,9 +890,11 @@ td {
   align-items: center;
   gap: 8px;
   margin-bottom: 28px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.3px;
+}
+
+.auth-logo .brand-wordmark {
+  font-size: 2rem;
+  line-height: 1.15;
 }
 
 .auth-title {
